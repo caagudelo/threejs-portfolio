@@ -40,7 +40,8 @@ export default function App() {
   const defaultCameraStateRef = useRef({ position: null, target: null, direction: null, distance: null });
   const pointerRef = useRef(new THREE.Vector2());
   const raycasterRef = useRef(new THREE.Raycaster());
-  const pointerStateRef = useRef({ isDown: false, isDragging: false, startX: 0, startY: 0 });
+  const pointerStateRef = useRef({ isDown: false, isDragging: false, startX: 0, startY: 0, pointerType: 'mouse', multiTouch: false });
+  const touchPointersRef = useRef(new Set());
   const vectorHelpersRef = useRef({
     target: new THREE.Vector3(),
     desired: new THREE.Vector3(),
@@ -73,6 +74,17 @@ export default function App() {
   const [spaceshipHovered, setSpaceshipHovered] = useState(false);
   const [spaceshipInfoVisible, setSpaceshipInfoVisible] = useState(false);
   const [atlasCollapsed, setAtlasCollapsed] = useState(true);
+  const [viewportWidth, setViewportWidth] = useState(() => (typeof window !== 'undefined' ? window.innerWidth : 1280));
+  const [sunPanelInteractive, setSunPanelInteractive] = useState(false);
+  const [spaceshipPanelInteractive, setSpaceshipPanelInteractive] = useState(false);
+
+  const layoutFlags = useMemo(() => ({
+    isTablet: viewportWidth <= 1024,
+    isMobile: viewportWidth <= 768,
+    isCompact: viewportWidth <= 520,
+  }), [viewportWidth]);
+
+  const { isTablet, isMobile, isCompact } = layoutFlags;
 
   const socialLinks = useMemo(() => ([
     { name: 'LinkedIn', src: 'https://www.linkedin.com/in/camilo-andres-agudelo-b53728a2/' },
@@ -413,6 +425,68 @@ export default function App() {
     setSpaceshipInfoVisible(false);
     resetCameraFocus();
   };
+
+  useEffect(() => {
+    const handleViewportResize = () => {
+      if (typeof window !== 'undefined') {
+        setViewportWidth(window.innerWidth);
+      }
+    };
+    handleViewportResize();
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+    window.addEventListener('resize', handleViewportResize);
+    return () => {
+      window.removeEventListener('resize', handleViewportResize);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      if (sunInfoVisible) {
+        setSunPanelInteractive(true);
+      } else {
+        setSunPanelInteractive(false);
+      }
+      return undefined;
+    }
+    let timeoutId;
+    if (sunInfoVisible) {
+      setSunPanelInteractive(false);
+      timeoutId = window.setTimeout(() => setSunPanelInteractive(true), 220);
+    } else {
+      setSunPanelInteractive(false);
+    }
+    return () => {
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [sunInfoVisible]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      if (spaceshipInfoVisible) {
+        setSpaceshipPanelInteractive(true);
+      } else {
+        setSpaceshipPanelInteractive(false);
+      }
+      return undefined;
+    }
+    let timeoutId;
+    if (spaceshipInfoVisible) {
+      setSpaceshipPanelInteractive(false);
+      timeoutId = window.setTimeout(() => setSpaceshipPanelInteractive(true), 220);
+    } else {
+      setSpaceshipPanelInteractive(false);
+    }
+    return () => {
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [spaceshipInfoVisible]);
 
   useEffect(() => {
     const container = mountRef.current;
@@ -976,6 +1050,15 @@ export default function App() {
       if (!rendererInstance || !cameraRef.current) {
         return;
       }
+      if (event.pointerType === 'touch') {
+        touchPointersRef.current.add(event.pointerId);
+        if (touchPointersRef.current.size > 1) {
+          pointerStateRef.current.multiTouch = true;
+        }
+      }
+      if (pointerStateRef.current.pointerType === 'touch' && pointerStateRef.current.multiTouch) {
+        return;
+      }
       const rect = rendererInstance.domElement.getBoundingClientRect();
       pointerRef.current.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       pointerRef.current.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -1007,19 +1090,41 @@ export default function App() {
     };
 
     const handlePointerDown = (event) => {
+      if (event.pointerType === 'touch') {
+        touchPointersRef.current.add(event.pointerId);
+      }
       pointerStateRef.current = {
         isDown: true,
         isDragging: false,
         startX: event.clientX,
         startY: event.clientY,
+        pointerType: event.pointerType || 'mouse',
+        multiTouch: event.pointerType === 'touch' && touchPointersRef.current.size > 1,
       };
     };
 
     const handlePointerUp = (event) => {
+      if (event.pointerType === 'touch') {
+        touchPointersRef.current.delete(event.pointerId);
+      }
       const state = pointerStateRef.current;
+      if (event.pointerType === 'touch') {
+        if (touchPointersRef.current.size > 0 || state.multiTouch) {
+          state.isDown = touchPointersRef.current.size > 0;
+          state.isDragging = false;
+          if (touchPointersRef.current.size === 0) {
+            state.multiTouch = false;
+          }
+          return;
+        }
+      }
       state.isDown = false;
       if (state.isDragging) {
         state.isDragging = false;
+        return;
+      }
+      if (state.multiTouch) {
+        state.multiTouch = false;
         return;
       }
       const rendererInstance = rendererRef.current;
@@ -1032,9 +1137,13 @@ export default function App() {
       castRay('click');
     };
 
-    const handlePointerLeave = () => {
+    const handlePointerLeave = (event) => {
+      if (event && event.pointerType === 'touch') {
+        touchPointersRef.current.delete(event.pointerId);
+      }
       pointerStateRef.current.isDown = false;
       pointerStateRef.current.isDragging = false;
+      pointerStateRef.current.multiTouch = false;
       if (hoveredPlanetRef.current && hoveredPlanetRef.current !== selectedPlanetRef.current) {
         resetPlanetAppearance(hoveredPlanetRef.current);
         hoveredPlanetRef.current = null;
@@ -1060,6 +1169,7 @@ export default function App() {
     renderer.domElement.addEventListener('pointerdown', handlePointerDown);
     renderer.domElement.addEventListener('pointerup', handlePointerUp);
     renderer.domElement.addEventListener('pointerleave', handlePointerLeave);
+    renderer.domElement.addEventListener('pointercancel', handlePointerLeave);
 
     const animate = () => {
       frameIdRef.current = requestAnimationFrame(animate);
@@ -1189,6 +1299,7 @@ export default function App() {
       renderer.domElement.removeEventListener('pointerdown', handlePointerDown);
       renderer.domElement.removeEventListener('pointerup', handlePointerUp);
       renderer.domElement.removeEventListener('pointerleave', handlePointerLeave);
+      renderer.domElement.removeEventListener('pointercancel', handlePointerLeave);
       if (controlsRef.current) {
         controlsRef.current.dispose();
         controlsRef.current = null;
@@ -1390,79 +1501,249 @@ export default function App() {
     sceneRef.current.add(group);
   }, [repos]);
 
+  const containerStyle = {
+    width: '100vw',
+    height: '100vh',
+    overflow: 'hidden',
+    background: '#050510',
+    position: 'relative',
+  };
+
+  const atlasPanelStyle = {
+    position: 'absolute',
+    top: isMobile ? 'auto' : (isTablet ? (atlasCollapsed ? '32px' : '60px') : (atlasCollapsed ? '40px' : '80px')),
+    bottom: isMobile ? '3%' : 'auto',
+    left: isMobile ? '50%' : '3%',
+    transform: isMobile ? 'translateX(-50%)' : 'none',
+    width: isMobile ? 'min(92vw, 440px)' : 'auto',
+    maxWidth: isMobile ? '100%' : (atlasCollapsed ? 280 : 340),
+    padding: atlasCollapsed
+      ? (isMobile ? '0.95rem 1rem' : '1rem 1.2rem')
+      : (isMobile ? '1.2rem 1.4rem' : '1.5rem'),
+    background: 'rgba(10, 12, 24, 0.82)',
+    border: '1px solid #00ffd0',
+    borderRadius: isMobile ? '1rem' : '1.2rem',
+    color: '#fff',
+    zIndex: 16,
+    pointerEvents: 'auto',
+    boxShadow: '0 6px 28px rgba(0,0,0,0.45)',
+    transition: 'all 0.25s ease',
+    backdropFilter: isMobile ? 'blur(6px)' : 'none',
+  };
+
+  const atlasHeaderStyle = {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: isMobile ? '0.5rem' : '0.75rem',
+    marginBottom: atlasCollapsed ? 0 : (isMobile ? '0.5rem' : '0.6rem'),
+  };
+
+  const atlasTitleStyle = {
+    margin: 0,
+    fontSize: isCompact ? '1.18rem' : (isMobile ? '1.28rem' : '1.4rem'),
+    color: '#00ffd0',
+  };
+
+  const atlasToggleStyle = {
+    border: '1px solid rgba(0,255,208,0.45)',
+    background: 'rgba(0,255,208,0.08)',
+    color: '#00ffd0',
+    borderRadius: isMobile ? '0.7rem' : '0.8rem',
+    padding: isMobile ? '0.32rem 0.7rem' : '0.35rem 0.8rem',
+    fontSize: isCompact ? '0.72rem' : '0.78rem',
+    fontWeight: 600,
+    cursor: 'pointer',
+    letterSpacing: 0.35,
+    whiteSpace: 'nowrap',
+  };
+
+  const atlasCollapsedTextStyle = {
+    margin: 0,
+    fontSize: isCompact ? '0.78rem' : '0.82rem',
+    color: '#c4d0ff',
+    textAlign: isMobile ? 'center' : 'left',
+  };
+
+  const atlasSkillsGridStyle = {
+    display: 'grid',
+    gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fit, minmax(140px, 1fr))',
+    gap: isMobile ? '0.5rem' : '0.6rem',
+  };
+
+  const sunHoverStyle = {
+    position: 'absolute',
+    top: isMobile ? '11%' : '18%',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    padding: isMobile ? '0.75rem 1rem' : '0.9rem 1.4rem',
+    width: isMobile ? '80vw' : 'auto',
+    textAlign: 'center',
+    background: 'rgba(10, 12, 24, 0.82)',
+    border: '1px solid #ffb347',
+    borderRadius: '0.9rem',
+    color: '#fff9f2',
+    zIndex: 18,
+    pointerEvents: 'none',
+    boxShadow: '0 6px 24px rgba(0,0,0,0.45)',
+    letterSpacing: 0.3,
+    fontSize: isMobile ? '0.82rem' : '0.9rem',
+  };
+
+  const spaceshipHoverStyle = {
+    position: 'absolute',
+    top: isMobile ? '16%' : '10%',
+    right: isMobile ? 'auto' : '4%',
+    left: isMobile ? '50%' : 'auto',
+    transform: isMobile ? 'translateX(-50%)' : 'none',
+    padding: isMobile ? '0.7rem 1rem' : '0.8rem 1.3rem',
+    width: isMobile ? '78vw' : 'auto',
+    textAlign: isMobile ? 'center' : 'left',
+    background: 'rgba(15, 20, 32, 0.85)',
+    border: '1px solid rgba(111, 226, 255, 0.75)',
+    borderRadius: '0.9rem',
+    color: '#e8f9ff',
+    zIndex: 19,
+    pointerEvents: 'none',
+    boxShadow: '0 6px 24px rgba(0,0,0,0.45)',
+    letterSpacing: 0.25,
+    fontSize: isMobile ? '0.82rem' : '0.9rem',
+  };
+
+  const sunInfoPanelStyle = {
+    position: 'absolute',
+    top: isMobile ? '7%' : '14%',
+    right: isMobile ? 'auto' : '4%',
+    left: isMobile ? '50%' : 'auto',
+    transform: isMobile ? 'translateX(-50%)' : 'none',
+    width: isMobile ? 'min(92vw, 440px)' : 'min(420px, 90vw)',
+    maxHeight: isMobile ? '76vh' : '70vh',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: isMobile ? '0.9rem' : '1.1rem',
+    padding: isMobile ? '1.3rem 1.2rem' : '1.6rem',
+    background: 'linear-gradient(145deg, rgba(12,13,28,0.95) 0%, rgba(18,22,44,0.9) 100%)',
+    borderRadius: isMobile ? '1.2rem' : '1.4rem',
+    border: '1px solid rgba(255, 179, 71, 0.65)',
+    color: '#fff',
+    zIndex: 22,
+    boxShadow: '0 12px 36px rgba(0,0,0,0.48)',
+    backdropFilter: 'blur(8px)',
+    pointerEvents: sunPanelInteractive ? 'auto' : 'none',
+  };
+
+  const sunTimelineWrapperStyle = {
+    position: 'relative',
+    paddingLeft: '1rem',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '1rem',
+    overflowY: 'auto',
+    maxHeight: isMobile ? 'calc(76vh - 7.5rem)' : 'calc(70vh - 4.5rem)',
+  };
+
+  const spaceshipInfoPanelStyle = {
+    position: 'absolute',
+    bottom: isMobile ? '6%' : '8%',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    width: isMobile ? 'min(94vw, 440px)' : 'min(520px, 94vw)',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: isMobile ? '0.9rem' : '1.1rem',
+    padding: isMobile ? '1.3rem 1.35rem' : '1.8rem',
+    background: 'linear-gradient(145deg, rgba(10,17,32,0.92) 0%, rgba(18,28,52,0.88) 100%)',
+    borderRadius: isMobile ? '1.2rem' : '1.5rem',
+    border: '1px solid rgba(111, 226, 255, 0.6)',
+    color: '#eff6ff',
+    zIndex: 23,
+    boxShadow: '0 16px 42px rgba(0,0,0,0.55)',
+    backdropFilter: 'blur(10px)',
+    pointerEvents: spaceshipPanelInteractive ? 'auto' : 'none',
+  };
+
+  const hoveredRepoStyle = {
+    position: 'absolute',
+    bottom: isMobile ? '26%' : '18%',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    padding: isMobile ? '0.9rem 1.2rem' : '1rem 1.5rem',
+    background: 'rgba(10, 12, 24, 0.8)',
+    border: '1px solid #00ffd0',
+    borderRadius: '1rem',
+    color: '#fff',
+    zIndex: 15,
+    pointerEvents: 'none',
+    minWidth: isMobile ? 'auto' : 260,
+    width: isMobile ? '82vw' : 'auto',
+    textAlign: 'center',
+  };
+
+  const selectedRepoStyle = {
+    position: 'absolute',
+    bottom: isMobile ? '6%' : '5%',
+    right: isMobile ? 'auto' : '5%',
+    left: isMobile ? '50%' : 'auto',
+    transform: isMobile ? 'translateX(-50%)' : 'none',
+    padding: isMobile ? '1.2rem 1.3rem' : '1.5rem',
+    background: 'rgba(10, 12, 24, 0.92)',
+    border: '1px solid #00ffd0',
+    borderRadius: isMobile ? '1rem' : '1.2rem',
+    color: '#fff',
+    zIndex: 20,
+    maxWidth: isMobile ? 'min(92vw, 380px)' : 320,
+    width: isMobile ? '100%' : 'auto',
+  };
+
   return (
-    <div style={{ width: '100vw', height: '100vh', overflow: 'hidden', background: '#050510', position: 'relative' }} ref={mountRef}>
-      <div id="info-panel" style={{
-        position: 'absolute',
-        top: atlasCollapsed ? 40 : 80,
-        left: '3%',
-        maxWidth: atlasCollapsed ? 260 : 320,
-        padding: atlasCollapsed ? '1rem 1.2rem' : '1.5rem',
-        background: 'rgba(10, 12, 24, 0.82)',
-        border: '1px solid #00ffd0',
-        borderRadius: '1.2rem',
-        color: '#fff',
-        zIndex: 16,
-        pointerEvents: 'auto',
-        boxShadow: '0 6px 28px rgba(0,0,0,0.45)',
-        transition: 'all 0.25s ease',
-      }}>
-        <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:'0.75rem', marginBottom: atlasCollapsed ? 0 : '0.6rem'}}>
-          <h2 style={{margin:0, fontSize:'1.4rem', color:'#00ffd0'}}>Atlas Galáctico</h2>
+    <div style={containerStyle} ref={mountRef}>
+      <div id="info-panel" style={atlasPanelStyle}>
+        <div style={atlasHeaderStyle}>
+          <h2 style={atlasTitleStyle}>Atlas Galáctico</h2>
           <button
             type="button"
             onClick={() => setAtlasCollapsed((prev) => !prev)}
-            style={{
-              border: '1px solid rgba(0,255,208,0.45)',
-              background: 'rgba(0,255,208,0.08)',
-              color: '#00ffd0',
-              borderRadius: '0.8rem',
-              padding: '0.35rem 0.8rem',
-              fontSize: '0.78rem',
-              fontWeight: 600,
-              cursor: 'pointer',
-              letterSpacing: 0.35,
-            }}
+            style={atlasToggleStyle}
           >
             {atlasCollapsed ? 'Expandir' : 'Minimizar'}
           </button>
         </div>
         {atlasCollapsed ? (
-          <p style={{margin:0, fontSize:'0.82rem', color:'#c4d0ff'}}>
+          <p style={atlasCollapsedTextStyle}>
             Panel comprimido. Selecciona "Expandir" para ver estadísticas y habilidades.
           </p>
         ) : (
           <>
-            <div style={{display:'flex', flexDirection:'column', gap:'0.75rem', margin:'0 0 1rem'}}>
-              <p style={{margin:0, fontSize:'0.96rem', lineHeight:1.5}}>
+            <div style={{display:'flex', flexDirection:'column', gap:isMobile ? '0.65rem' : '0.75rem', margin:'0 0 1rem'}}>
+              <p style={{margin:0, fontSize:isMobile ? '0.9rem' : '0.96rem', lineHeight:1.5}}>
                 Soy Camilo Agudelo, desarrollador de software que disfruta convertir ideas complejas en experiencias fluidas. Domino ecosistemas empresariales y creativos, desde APIs de alto rendimiento hasta interfaces inmersivas.
               </p>
-              <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:'0.6rem'}}>
-                <div style={{padding:'0.65rem', borderRadius:'0.9rem', background:'rgba(0,255,208,0.08)', border:'1px solid rgba(0,255,208,0.22)'}}>
-                  <strong style={{display:'block', fontSize:'0.82rem', color:'#00ffd0', letterSpacing:0.35}}>Back-end</strong>
-                  <span style={{fontSize:'0.8rem', color:'#d7dcff'}}>C#, .NET, Java, Node.js, PHP</span>
+              <div style={atlasSkillsGridStyle}>
+                <div style={{padding:isMobile ? '0.55rem 0.65rem' : '0.65rem', borderRadius:isMobile ? '0.8rem' : '0.9rem', background:'rgba(0,255,208,0.08)', border:'1px solid rgba(0,255,208,0.22)'}}>
+                  <strong style={{display:'block', fontSize:isMobile ? '0.78rem' : '0.82rem', color:'#00ffd0', letterSpacing:0.35}}>Back-end</strong>
+                  <span style={{fontSize:isMobile ? '0.78rem' : '0.8rem', color:'#d7dcff'}}>C#, .NET, Java, Node.js, PHP</span>
                 </div>
-                <div style={{padding:'0.65rem', borderRadius:'0.9rem', background:'rgba(255,179,71,0.08)', border:'1px solid rgba(255,179,71,0.22)'}}>
-                  <strong style={{display:'block', fontSize:'0.82rem', color:'#ffb347', letterSpacing:0.35}}>Front-end</strong>
-                  <span style={{fontSize:'0.8rem', color:'#f7f0ff'}}>Angular, React, experiencias 3D</span>
+                <div style={{padding:isMobile ? '0.55rem 0.65rem' : '0.65rem', borderRadius:isMobile ? '0.8rem' : '0.9rem', background:'rgba(255,179,71,0.08)', border:'1px solid rgba(255,179,71,0.22)'}}>
+                  <strong style={{display:'block', fontSize:isMobile ? '0.78rem' : '0.82rem', color:'#ffb347', letterSpacing:0.35}}>Front-end</strong>
+                  <span style={{fontSize:isMobile ? '0.78rem' : '0.8rem', color:'#f7f0ff'}}>Angular, React, experiencias 3D</span>
                 </div>
-                <div style={{padding:'0.65rem', borderRadius:'0.9rem', background:'rgba(111,226,255,0.08)', border:'1px solid rgba(111,226,255,0.22)'}}>
-                  <strong style={{display:'block', fontSize:'0.82rem', color:'#6fe2ff', letterSpacing:0.35}}>Data & AI</strong>
-                  <span style={{fontSize:'0.8rem', color:'#e8f9ff'}}>Python, visión artificial, automatización</span>
+                <div style={{padding:isMobile ? '0.55rem 0.65rem' : '0.65rem', borderRadius:isMobile ? '0.8rem' : '0.9rem', background:'rgba(111,226,255,0.08)', border:'1px solid rgba(111,226,255,0.22)'}}>
+                  <strong style={{display:'block', fontSize:isMobile ? '0.78rem' : '0.82rem', color:'#6fe2ff', letterSpacing:0.35}}>Data & AI</strong>
+                  <span style={{fontSize:isMobile ? '0.78rem' : '0.8rem', color:'#e8f9ff'}}>Python, visión artificial, automatización</span>
                 </div>
-                <div style={{padding:'0.65rem', borderRadius:'0.9rem', background:'rgba(158,130,255,0.08)', border:'1px solid rgba(158,130,255,0.22)'}}>
-                  <strong style={{display:'block', fontSize:'0.82rem', color:'#9fc0ff', letterSpacing:0.35}}>Arquitectura</strong>
-                  <span style={{fontSize:'0.8rem', color:'#e1e5ff'}}>Diseño limpio, integración continua, soluciones escalables</span>
+                <div style={{padding:isMobile ? '0.55rem 0.65rem' : '0.65rem', borderRadius:isMobile ? '0.8rem' : '0.9rem', background:'rgba(158,130,255,0.08)', border:'1px solid rgba(158,130,255,0.22)'}}>
+                  <strong style={{display:'block', fontSize:isMobile ? '0.78rem' : '0.82rem', color:'#9fc0ff', letterSpacing:0.35}}>Arquitectura</strong>
+                  <span style={{fontSize:isMobile ? '0.78rem' : '0.8rem', color:'#e1e5ff'}}>Diseño limpio, integración continua, soluciones escalables</span>
                 </div>
               </div>
-              <p style={{margin:0, fontSize:'0.92rem', lineHeight:1.45, color:'#c4d0ff'}}>
+              <p style={{margin:0, fontSize:isMobile ? '0.86rem' : '0.92rem', lineHeight:1.45, color:'#c4d0ff'}}>
                 Cada planeta representa un repositorio clave. Recorre la órbita, identifica tecnologías y descubre cómo aplico estas habilidades en proyectos reales.
               </p>
             </div>
             {loadingRepos && <p style={{color:'#8ea6ff'}}>Cargando constelaciones...</p>}
             {errorRepos && <p style={{color:'#ff7185'}}>{errorRepos}</p>}
             {!loadingRepos && !errorRepos && (
-              <div style={{fontSize:'0.9rem', lineHeight:1.5}}>
+              <div style={{fontSize:isMobile ? '0.86rem' : '0.9rem', lineHeight:1.5}}>
                 <div><strong>Repositorios:</strong> {portfolioStats.totalRepos}</div>
                 <div><strong>Stars:</strong> {portfolioStats.totalStars}</div>
                 <div><strong>Forks:</strong> {portfolioStats.totalForks}</div>
@@ -1484,65 +1765,21 @@ export default function App() {
         )}
       </div>
       {sunHovered && !sunInfoVisible && (
-        <div style={{
-          position: 'absolute',
-          top: '18%',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          padding: '0.9rem 1.4rem',
-          background: 'rgba(10, 12, 24, 0.82)',
-          border: '1px solid #ffb347',
-          borderRadius: '0.9rem',
-          color: '#fff9f2',
-          zIndex: 18,
-          pointerEvents: 'none',
-          boxShadow: '0 6px 24px rgba(0,0,0,0.45)',
-          letterSpacing: 0.3,
-        }}>
+        <div style={sunHoverStyle}>
           Toca el sol para desplegar mi órbita profesional.
         </div>
       )}
       {spaceshipHovered && !spaceshipInfoVisible && (
-        <div style={{
-          position: 'absolute',
-          top: '10%',
-          right: '4%',
-          padding: '0.8rem 1.3rem',
-          background: 'rgba(15, 20, 32, 0.85)',
-          border: '1px solid rgba(111, 226, 255, 0.75)',
-          borderRadius: '0.9rem',
-          color: '#e8f9ff',
-          zIndex: 19,
-          pointerEvents: 'none',
-          boxShadow: '0 6px 24px rgba(0,0,0,0.45)',
-          letterSpacing: 0.25,
-        }}>
+        <div style={spaceshipHoverStyle}>
           Activa la nave para acceder a mis redes.
         </div>
       )}
       {sunInfoVisible && (
-        <div style={{
-          position: 'absolute',
-          top: '14%',
-          right: '4%',
-          width: 'min(420px, 90vw)',
-          maxHeight: '70vh',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '1.1rem',
-          padding: '1.6rem',
-          background: 'linear-gradient(145deg, rgba(12,13,28,0.95) 0%, rgba(18,22,44,0.9) 100%)',
-          borderRadius: '1.4rem',
-          border: '1px solid rgba(255, 179, 71, 0.65)',
-          color: '#fff',
-          zIndex: 22,
-          boxShadow: '0 12px 36px rgba(0,0,0,0.48)',
-          backdropFilter: 'blur(8px)',
-        }}>
-          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+        <div style={sunInfoPanelStyle}>
+          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.6rem'}}>
             <div>
-              <h3 style={{ margin: 0, color: '#ffb347', fontSize: '1.4rem' }}>Órbita Profesional</h3>
-              <p style={{ margin: '0.35rem 0 0', fontSize: '0.9rem', color: '#d7dcff' }}>Una trayectoria iluminada por proyectos y equipos memorables.</p>
+              <h3 style={{ margin: 0, color: '#ffb347', fontSize: isMobile ? '1.28rem' : '1.4rem' }}>Órbita Profesional</h3>
+              <p style={{ margin: '0.35rem 0 0', fontSize: isMobile ? '0.86rem' : '0.9rem', color: '#d7dcff' }}>Una trayectoria iluminada por proyectos y equipos memorables.</p>
             </div>
             <button
               type="button"
@@ -1551,10 +1788,10 @@ export default function App() {
                 border: 'none',
                 background: 'rgba(255,255,255,0.08)',
                 color: '#ffb347',
-                width: 36,
-                height: 36,
+                width: isMobile ? 32 : 36,
+                height: isMobile ? 32 : 36,
                 borderRadius: '50%',
-                fontSize: '1.2rem',
+                fontSize: isMobile ? '1rem' : '1.2rem',
                 cursor: 'pointer',
               }}
             >
@@ -1565,13 +1802,13 @@ export default function App() {
             <div style={{
               display: 'flex',
               alignItems: 'center',
-              gap: '1rem',
-              padding: '1rem',
-              borderRadius: '1.1rem',
+              gap: isMobile ? '0.8rem' : '1rem',
+              padding: isMobile ? '0.9rem' : '1rem',
+              borderRadius: isMobile ? '1rem' : '1.1rem',
               border: '1px solid rgba(255,179,71,0.3)',
               background: 'rgba(20, 24, 46, 0.65)',
               color: '#ffd9a1',
-              fontSize: '0.9rem',
+              fontSize: isMobile ? '0.86rem' : '0.9rem',
             }}>
               Cargando perfil...
             </div>
@@ -1591,35 +1828,36 @@ export default function App() {
           {!loadingProfile && !errorProfile && profileData && (
             <div style={{
               display: 'flex',
-              gap: '1.1rem',
-              alignItems: 'center',
-              padding: '1.1rem',
-              borderRadius: '1.2rem',
+              gap: isMobile ? '0.9rem' : '1.1rem',
+              alignItems: isMobile ? 'flex-start' : 'center',
+              padding: isMobile ? '1rem' : '1.1rem',
+              borderRadius: isMobile ? '1.1rem' : '1.2rem',
               border: '1px solid rgba(255,179,71,0.35)',
               background: 'rgba(18, 26, 48, 0.82)',
               boxShadow: '0 8px 26px rgba(0,0,0,0.35)',
+              flexDirection: isMobile ? 'column' : 'row',
             }}>
               <img
                 src={profileData.avatar_url}
                 alt={profileData.name ? `Avatar de ${profileData.name}` : 'Avatar de perfil'}
                 style={{
-                  width: 82,
-                  height: 82,
+                  width: isMobile ? 70 : 82,
+                  height: isMobile ? 70 : 82,
                   borderRadius: '50%',
                   objectFit: 'cover',
                   border: '2px solid rgba(255,179,71,0.5)',
                   boxShadow: '0 0 18px rgba(255,179,71,0.4)'
                 }}
               />
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', width: '100%' }}>
                 <div>
-                  <h4 style={{ margin: 0, fontSize: '1.2rem', color: '#ffcf86' }}>{profileData.name || profileData.login || 'Perfil sin nombre'}</h4>
+                  <h4 style={{ margin: 0, fontSize: isMobile ? '1.08rem' : '1.2rem', color: '#ffcf86' }}>{profileData.name || profileData.login || 'Perfil sin nombre'}</h4>
                   {profileData.login && (
-                    <p style={{ margin: '0.2rem 0 0', fontSize: '0.85rem', color: '#9fb5ff' }}>@{profileData.login}</p>
+                    <p style={{ margin: '0.2rem 0 0', fontSize: isMobile ? '0.8rem' : '0.85rem', color: '#9fb5ff' }}>@{profileData.login}</p>
                   )}
                 </div>
                 {profileData.bio && (
-                  <p style={{ margin: 0, fontSize: '0.85rem', lineHeight: 1.4, color: '#d7dcff' }}>{profileData.bio}</p>
+                  <p style={{ margin: 0, fontSize: isMobile ? '0.8rem' : '0.85rem', lineHeight: 1.4, color: '#d7dcff' }}>{profileData.bio}</p>
                 )}
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginTop: '0.3rem' }}>
                   {profileData.location && (
@@ -1663,14 +1901,14 @@ export default function App() {
                   type="button"
                   onClick={() => window.open('https://www.linkedin.com/in/camilo-andres-agudelo-b53728a2/', '_blank', 'noopener,noreferrer')}
                   style={{
-                    alignSelf: 'flex-start',
+                    alignSelf: isMobile ? 'stretch' : 'flex-start',
                     marginTop: '0.4rem',
-                    padding: '0.45rem 0.9rem',
+                    padding: isMobile ? '0.45rem 0.75rem' : '0.45rem 0.9rem',
                     borderRadius: '0.7rem',
                     border: '1px solid rgba(255,179,71,0.6)',
                     background: 'rgba(255,179,71,0.18)',
                     color: '#ffd9a1',
-                    fontSize: '0.8rem',
+                    fontSize: isMobile ? '0.78rem' : '0.8rem',
                     cursor: 'pointer',
                     fontWeight: 600,
                     letterSpacing: 0.4,
@@ -1681,15 +1919,7 @@ export default function App() {
               </div>
             </div>
           )}
-          <div style={{
-            position: 'relative',
-            paddingLeft: '1rem',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '1rem',
-            overflowY: 'auto',
-            maxHeight: 'calc(70vh - 4.5rem)',
-          }}>
+          <div style={sunTimelineWrapperStyle}>
             <span style={{
               position: 'absolute',
               left: '10px',
@@ -1711,15 +1941,15 @@ export default function App() {
             {!loadingExperiences && !errorExperiences && experiencesTimeline.length > 0 && experiencesTimeline.map((experienceEntry) => (
               <div key={experienceEntry.id} style={{
                 position: 'relative',
-                padding: '0.9rem 1rem 0.9rem 1.4rem',
+                padding: isMobile ? '0.8rem 0.9rem 0.8rem 1.2rem' : '0.9rem 1rem 0.9rem 1.4rem',
                 background: 'rgba(15, 18, 36, 0.78)',
-                borderRadius: '1rem',
+                borderRadius: isMobile ? '0.9rem' : '1rem',
                 border: '1px solid rgba(255,179,71,0.35)',
                 boxShadow: '0 10px 28px rgba(0,0,0,0.35)',
               }}>
                 <span style={{
                   position: 'absolute',
-                  left: '-0.55rem',
+                  left: isMobile ? '-0.45rem' : '-0.55rem',
                   top: '1.1rem',
                   width: '0.9rem',
                   height: '0.9rem',
@@ -1728,10 +1958,10 @@ export default function App() {
                   boxShadow: '0 0 16px rgba(255,179,71,0.7)',
                 }} />
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-                  <span style={{ fontSize: '0.82rem', letterSpacing: 0.4, color: '#ffd9a1' }}>{experienceEntry.period}</span>
-                  <strong style={{ fontSize: '1.05rem', color: '#ffffff' }}>{experienceEntry.role}</strong>
-                  <span style={{ fontSize: '0.92rem', color: '#9fb5ff' }}>{experienceEntry.company}</span>
-                  <p style={{ margin: '0.45rem 0 0', fontSize: '0.88rem', lineHeight: 1.6, color: '#d7dcff' }}>{experienceEntry.description}</p>
+                  <span style={{ fontSize: isMobile ? '0.78rem' : '0.82rem', letterSpacing: 0.4, color: '#ffd9a1' }}>{experienceEntry.period}</span>
+                  <strong style={{ fontSize: isMobile ? '0.98rem' : '1.05rem', color: '#ffffff' }}>{experienceEntry.role}</strong>
+                  <span style={{ fontSize: isMobile ? '0.88rem' : '0.92rem', color: '#9fb5ff' }}>{experienceEntry.company}</span>
+                  <p style={{ margin: '0.45rem 0 0', fontSize: isMobile ? '0.82rem' : '0.88rem', lineHeight: 1.6, color: '#d7dcff' }}>{experienceEntry.description}</p>
                   {experienceEntry.link && (
                     <div style={{ marginTop: '0.6rem' }}>
                       <a
@@ -1744,7 +1974,7 @@ export default function App() {
                           gap: '0.35rem',
                           color: '#00ffd0',
                           textDecoration: 'none',
-                          fontSize: '0.82rem',
+                          fontSize: isMobile ? '0.78rem' : '0.82rem',
                           fontWeight: 600,
                         }}
                       >
@@ -1760,28 +1990,11 @@ export default function App() {
         </div>
       )}
       {spaceshipInfoVisible && (
-        <div style={{
-          position: 'absolute',
-          bottom: '8%',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          width: 'min(520px, 94vw)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '1.1rem',
-          padding: '1.8rem',
-          background: 'linear-gradient(145deg, rgba(10,17,32,0.92) 0%, rgba(18,28,52,0.88) 100%)',
-          borderRadius: '1.5rem',
-          border: '1px solid rgba(111, 226, 255, 0.6)',
-          color: '#eff6ff',
-          zIndex: 23,
-          boxShadow: '0 16px 42px rgba(0,0,0,0.55)',
-          backdropFilter: 'blur(10px)',
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={spaceshipInfoPanelStyle}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'flex-start' : 'center', gap: '0.6rem' }}>
             <div>
-              <h3 style={{ margin: 0, fontSize: '1.35rem', color: '#6fe2ff' }}>Bitácora de Contacto</h3>
-              <p style={{ margin: '0.4rem 0 0', fontSize: '0.9rem', color: '#c8e6ff' }}>
+              <h3 style={{ margin: 0, fontSize: isMobile ? '1.2rem' : '1.35rem', color: '#6fe2ff' }}>Bitácora de Contacto</h3>
+              <p style={{ margin: '0.4rem 0 0', fontSize: isMobile ? '0.84rem' : '0.9rem', color: '#c8e6ff' }}>
                 Elige un canal para conectar y seguir nuevas misiones.
               </p>
             </div>
@@ -1792,10 +2005,10 @@ export default function App() {
                 border: 'none',
                 background: 'rgba(255,255,255,0.06)',
                 color: '#6fe2ff',
-                width: 36,
-                height: 36,
+                width: isMobile ? 32 : 36,
+                height: isMobile ? 32 : 36,
                 borderRadius: '50%',
-                fontSize: '1.1rem',
+                fontSize: isMobile ? '1rem' : '1.1rem',
                 cursor: 'pointer',
               }}
             >
@@ -1804,8 +2017,8 @@ export default function App() {
           </div>
           <div style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-            gap: '0.9rem',
+            gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fit, minmax(140px, 1fr))',
+            gap: isMobile ? '0.75rem' : '0.9rem',
           }}>
             {socialLinks.map((link) => (
               <button
@@ -1813,17 +2026,18 @@ export default function App() {
                 type="button"
                 onClick={() => window.open(link.src, '_blank', 'noopener,noreferrer')}
                 style={{
-                  padding: '1rem',
-                  borderRadius: '1rem',
+                  padding: isMobile ? '0.9rem 1rem' : '1rem',
+                  borderRadius: isMobile ? '1rem' : '1.05rem',
                   border: '1px solid rgba(111, 226, 255, 0.45)',
                   background: 'rgba(12, 22, 40, 0.9)',
                   color: '#e8f9ff',
                   display: 'flex',
                   flexDirection: 'column',
-                  alignItems: 'flex-start',
+                  alignItems: isMobile ? 'center' : 'flex-start',
                   gap: '0.45rem',
                   cursor: 'pointer',
                   transition: 'transform 0.2s ease, box-shadow 0.2s ease',
+                  textAlign: isMobile ? 'center' : 'left',
                 }}
                 onMouseEnter={(event) => {
                   event.currentTarget.style.transform = 'translateY(-4px)';
@@ -1834,75 +2048,52 @@ export default function App() {
                   event.currentTarget.style.boxShadow = 'none';
                 }}
               >
-                <span style={{ fontSize: '0.82rem', letterSpacing: 0.35, color: '#6fe2ff' }}>Social</span>
-                <strong style={{ fontSize: '1rem' }}>{link.name}</strong>
-                <span style={{ fontSize: '0.75rem', color: '#bbdfff' }}>Abrir enlace ↗</span>
+                <span style={{ fontSize: isMobile ? '0.78rem' : '0.82rem', letterSpacing: 0.35, color: '#6fe2ff' }}>Social</span>
+                <strong style={{ fontSize: isMobile ? '0.96rem' : '1rem' }}>{link.name}</strong>
+                <span style={{ fontSize: isMobile ? '0.72rem' : '0.75rem', color: '#bbdfff' }}>Abrir enlace ↗</span>
               </button>
             ))}
           </div>
         </div>
       )}
       {hoveredRepo && !selectedRepo && (
-        <div style={{
-          position: 'absolute',
-          bottom: '18%',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          padding: '1rem 1.5rem',
-          background: 'rgba(10, 12, 24, 0.8)',
-          border: '1px solid #00ffd0',
-          borderRadius: '1rem',
-          color: '#fff',
-          zIndex: 15,
-          pointerEvents: 'none',
-          minWidth: 260,
-          textAlign: 'center'
-        }}>
+        <div style={hoveredRepoStyle}>
           <strong style={{color:'#00ffd0'}}>{hoveredRepo.name}</strong>
-          <div style={{fontSize:'0.9rem', marginTop: '0.5rem'}}>{hoveredRepo.description || 'Sin descripción disponible.'}</div>
+          <div style={{fontSize:isMobile ? '0.84rem' : '0.9rem', marginTop: '0.5rem'}}>{hoveredRepo.description || 'Sin descripción disponible.'}</div>
         </div>
       )}
       {selectedRepo && (
-        <div style={{
-          position: 'absolute',
-          bottom: '5%',
-          right: '5%',
-          padding: '1.5rem',
-          background: 'rgba(10, 12, 24, 0.92)',
-          border: '1px solid #00ffd0',
-          borderRadius: '1.2rem',
-          color: '#fff',
-          zIndex: 20,
-          maxWidth: 320,
-        }}>
-          <h3 style={{marginTop:0, color:'#00ffd0'}}>{selectedRepo.name}</h3>
-          <p style={{fontSize:'0.95rem'}}>{selectedRepo.description || 'Sin descripción disponible.'}</p>
-          <p style={{fontSize:'0.85rem', marginBottom:'0.5rem'}}>Lenguaje: {selectedRepo.language || 'Sin lenguaje'} • ⭐ {selectedRepo.stargazers_count ?? 0} • Forks {selectedRepo.forks ?? 0} • Watchers {selectedRepo.watchers ?? selectedRepo.watchers_count ?? 0}</p>
-          <p style={{fontSize:'0.8rem', marginBottom:'1rem', color:'#8ea6ff'}}>Actualizado: {selectedRepo.updated_at ? new Date(selectedRepo.updated_at).toLocaleDateString() : 'Fecha no disponible'}</p>
-          <div style={{display:'flex',gap:'0.5rem',justifyContent:'flex-end'}}>
+        <div style={selectedRepoStyle}>
+          <h3 style={{marginTop:0, color:'#00ffd0', fontSize: isMobile ? '1.05rem' : '1.15rem'}}>{selectedRepo.name}</h3>
+          <p style={{fontSize:isMobile ? '0.88rem' : '0.95rem'}}>{selectedRepo.description || 'Sin descripción disponible.'}</p>
+          <p style={{fontSize:isMobile ? '0.8rem' : '0.85rem', marginBottom:'0.5rem'}}>Lenguaje: {selectedRepo.language || 'Sin lenguaje'} • ⭐ {selectedRepo.stargazers_count ?? 0} • Forks {selectedRepo.forks ?? 0} • Watchers {selectedRepo.watchers ?? selectedRepo.watchers_count ?? 0}</p>
+          <p style={{fontSize:isMobile ? '0.74rem' : '0.8rem', marginBottom:'1rem', color:'#8ea6ff'}}>Actualizado: {selectedRepo.updated_at ? new Date(selectedRepo.updated_at).toLocaleDateString() : 'Fecha no disponible'}</p>
+          <div style={{display:'flex',gap:'0.5rem',justifyContent:isMobile ? 'space-between' : 'flex-end', flexWrap:'wrap'}}>
             <button
               type="button"
               onClick={clearSelection}
               style={{
-                padding:'0.5rem 0.8rem',
+                padding:isMobile ? '0.45rem 0.7rem' : '0.5rem 0.8rem',
                 borderRadius:8,
                 border:'1px solid #00ffd0',
                 background:'transparent',
                 color:'#00ffd0',
-                cursor:'pointer'
+                cursor:'pointer',
+                flex: isMobile ? '1 1 45%' : '0 0 auto',
               }}
             >Cerrar</button>
             <button
               type="button"
               onClick={() => window.open(selectedRepo.html_url, '_blank', 'noopener,noreferrer')}
               style={{
-                padding:'0.5rem 0.8rem',
+                padding:isMobile ? '0.45rem 0.7rem' : '0.5rem 0.8rem',
                 borderRadius:8,
                 border:'none',
                 background:'#00ffd0',
                 color:'#081018',
                 fontWeight:700,
-                cursor:'pointer'
+                cursor:'pointer',
+                flex: isMobile ? '1 1 45%' : '0 0 auto',
               }}
             >Ver en GitHub</button>
           </div>
