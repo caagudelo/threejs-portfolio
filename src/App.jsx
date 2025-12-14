@@ -1,7 +1,5 @@
 
 import React, { useEffect, useRef, useState, useMemo } from 'react';
-import Navbar from './components/Navbar';
-import Contact from './sections/Contact';
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -11,6 +9,12 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { FilmPass } from 'three/examples/jsm/postprocessing/FilmPass.js';
 import { createSolarSystem } from './three/SolarSystem';
 import { fetchGithubRepos } from './three/githubApi';
+import { fetchExperiences } from './services/experiencesApi';
+
+const experienceDateFormatter = new Intl.DateTimeFormat('es-ES', {
+  month: 'short',
+  year: 'numeric',
+});
 
 export default function App() {
   const mountRef = useRef(null);
@@ -42,12 +46,73 @@ export default function App() {
     desired: new THREE.Vector3(),
     offset: new THREE.Vector3(),
   });
+  const interactableMeshesRef = useRef([]);
+  const sunRef = useRef({ core: null, halo: null, rim: null, group: null });
+  const sunSelectedRef = useRef(false);
+  const hoveredSunRef = useRef(false);
+  const spaceshipRef = useRef({ mesh: null, group: null });
+  const spaceshipSelectedRef = useRef(false);
+  const hoveredSpaceshipRef = useRef(false);
 
   const [repos, setRepos] = useState([]);
   const [loadingRepos, setLoadingRepos] = useState(true);
   const [errorRepos, setErrorRepos] = useState(null);
   const [hoveredRepo, setHoveredRepo] = useState(null);
   const [selectedRepo, setSelectedRepo] = useState(null);
+
+  const [experiencesData, setExperiencesData] = useState([]);
+  const [loadingExperiences, setLoadingExperiences] = useState(true);
+  const [errorExperiences, setErrorExperiences] = useState(null);
+
+  const [profileData, setProfileData] = useState(null);
+  const [loadingProfile, setLoadingProfile] = useState(true);
+  const [errorProfile, setErrorProfile] = useState(null);
+
+  const [sunHovered, setSunHovered] = useState(false);
+  const [sunInfoVisible, setSunInfoVisible] = useState(false);
+  const [spaceshipHovered, setSpaceshipHovered] = useState(false);
+  const [spaceshipInfoVisible, setSpaceshipInfoVisible] = useState(false);
+  const [atlasCollapsed, setAtlasCollapsed] = useState(true);
+
+  const socialLinks = useMemo(() => ([
+    { name: 'LinkedIn', src: 'https://www.linkedin.com/in/camilo-andres-agudelo-b53728a2/' },
+    { name: 'GitHub', src: 'https://github.com/caagudelo' },
+    { name: 'Contacto', src: 'mailto:caagudelo.dev@gmail.com' },
+  ]), []);
+
+  const experiencesTimeline = useMemo(() => {
+    if (!Array.isArray(experiencesData)) {
+      return [];
+    }
+
+    const parseDate = (value) => {
+      if (!value) {
+        return null;
+      }
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? null : parsed;
+    };
+
+    return experiencesData
+      .map((entry, index) => {
+        const startDate = parseDate(entry.start_date_experience ?? entry.startDate ?? entry.start);
+        const endDate = parseDate(entry.end_date_experience ?? entry.endDate ?? entry.end);
+        const isCurrent = Boolean(entry.is_current_experience ?? entry.is_current ?? entry.current ?? (!endDate));
+        const formattedStart = startDate ? experienceDateFormatter.format(startDate) : 'Sin fecha';
+        const formattedEnd = isCurrent ? 'Actualidad' : (endDate ? experienceDateFormatter.format(endDate) : 'Actualidad');
+        return {
+          id: entry.id ?? `${entry.company ?? entry.company_experience ?? 'exp'}-${index}`,
+          company: entry.company_experience ?? entry.company ?? entry.organization ?? 'Compañía no especificada',
+          role: entry.role ?? entry.charge_experience ?? entry.title ?? 'Rol no especificado',
+          description: entry.description_experience ?? entry.description ?? entry.summary ?? '',
+          link: entry.link ?? entry.company_link_experience ?? entry.url ?? null,
+          period: `${formattedStart} – ${formattedEnd}`,
+          isCurrent,
+          sortValue: startDate ? startDate.getTime() : Number.MIN_SAFE_INTEGER,
+        };
+      })
+      .sort((a, b) => b.sortValue - a.sortValue);
+  }, [experiencesData]);
 
   const portfolioStats = useMemo(() => {
     if (!repos || repos.length === 0) {
@@ -125,6 +190,74 @@ export default function App() {
     }
   };
 
+  const resetSunAppearance = () => {
+    const sun = sunRef.current;
+    if (!sun || !sun.core) {
+      return;
+    }
+    const { group, halo, rim } = sun;
+    const baseScale = sun.core.userData?.baseScale ?? 1;
+    if (group) {
+      group.scale.setScalar(baseScale);
+    }
+    if (halo && halo.material) {
+      const baseHalo = sun.core.userData?.baseHaloOpacity ?? halo.material.opacity;
+      halo.material.opacity = baseHalo;
+    }
+    if (rim && rim.material && rim.material.uniforms && rim.material.uniforms.fresnelBias) {
+      const baseBias = sun.core.userData?.baseRimBias ?? rim.material.uniforms.fresnelBias.value;
+      rim.material.uniforms.fresnelBias.value = baseBias;
+    }
+  };
+
+  const emphasizeSun = (mode = 'hover') => {
+    const sun = sunRef.current;
+    if (!sun || !sun.core) {
+      return;
+    }
+    const { group, halo, rim } = sun;
+    const baseScale = sun.core.userData?.baseScale ?? 1;
+    const highlightScale = sun.core.userData?.highlightScale ?? (baseScale + 0.12);
+    const targetScale = mode === 'selected' ? highlightScale + 0.06 : highlightScale;
+    if (group) {
+      group.scale.setScalar(targetScale);
+    }
+    if (halo && halo.material) {
+      const baseHalo = sun.core.userData?.baseHaloOpacity ?? halo.material.opacity;
+      const highlightHalo = sun.core.userData?.highlightHaloOpacity ?? (baseHalo + 0.08);
+      halo.material.opacity = mode === 'selected' ? Math.min(0.35, highlightHalo + 0.06) : highlightHalo;
+    }
+    if (rim && rim.material && rim.material.uniforms && rim.material.uniforms.fresnelBias) {
+      const highlightBias = sun.core.userData?.highlightRimBias ?? rim.material.uniforms.fresnelBias.value + 0.04;
+      rim.material.uniforms.fresnelBias.value = mode === 'selected' ? highlightBias + 0.02 : highlightBias;
+    }
+  };
+
+  const resetSpaceshipAppearance = () => {
+    const spaceship = spaceshipRef.current;
+    if (!spaceship || !spaceship.mesh || !spaceship.mesh.userData) {
+      return;
+    }
+    const data = spaceship.mesh.userData;
+    if (data.root) {
+      data.root.scale.setScalar(data.baseScale || 1);
+    }
+    data.highlighted = false;
+  };
+
+  const emphasizeSpaceship = (mode = 'hover') => {
+    const spaceship = spaceshipRef.current;
+    if (!spaceship || !spaceship.mesh || !spaceship.mesh.userData) {
+      return;
+    }
+    const data = spaceship.mesh.userData;
+    const targetScale = mode === 'selected' ? (data.highlightScale || 1.24) + 0.06 : data.highlightScale || 1.24;
+    if (data.root) {
+      data.root.scale.setScalar(targetScale);
+    }
+    data.highlighted = mode === 'hover' || mode === 'selected';
+  };
+
   const scheduleCameraFocus = (targetVec, { distance, direction, followPlanet = null, maintainFollow = false } = {}) => {
     const camera = cameraRef.current;
     const controls = controlsRef.current;
@@ -199,10 +332,50 @@ export default function App() {
     });
   };
 
+  const focusOnSun = () => {
+    const sun = sunRef.current;
+    if (!sun || !sun.group) {
+      return;
+    }
+    const worldPosition = new THREE.Vector3();
+    sun.group.getWorldPosition(worldPosition);
+    const customDirection = new THREE.Vector3(0.65, 0.38, 1).normalize();
+    scheduleCameraFocus(worldPosition, {
+      distance: 78,
+      direction: customDirection,
+      followPlanet: null,
+      maintainFollow: false,
+    });
+  };
+
+  const focusOnSpaceship = () => {
+    const spaceship = spaceshipRef.current;
+    if (!spaceship || !spaceship.mesh || !spaceship.mesh.userData) {
+      return;
+    }
+    const worldPosition = new THREE.Vector3();
+    spaceship.mesh.getWorldPosition(worldPosition);
+    const offsetDirection = new THREE.Vector3(-0.4, 0.35, 1).normalize();
+    scheduleCameraFocus(worldPosition, {
+      distance: 54,
+      direction: offsetDirection,
+      followPlanet: null,
+      maintainFollow: false,
+    });
+  };
+
   const clearSelection = () => {
     if (selectedPlanetRef.current) {
       resetPlanetAppearance(selectedPlanetRef.current);
       selectedPlanetRef.current = null;
+    }
+    if (sunSelectedRef.current) {
+      resetSunAppearance();
+      sunSelectedRef.current = false;
+    }
+    if (spaceshipSelectedRef.current) {
+      resetSpaceshipAppearance();
+      spaceshipSelectedRef.current = false;
     }
     setSelectedRepo(null);
     if (hoveredPlanetRef.current) {
@@ -210,6 +383,34 @@ export default function App() {
       hoveredPlanetRef.current = null;
     }
     setHoveredRepo(null);
+    hoveredSunRef.current = false;
+    setSunHovered(false);
+    setSunInfoVisible(false);
+    hoveredSpaceshipRef.current = false;
+    setSpaceshipHovered(false);
+    setSpaceshipInfoVisible(false);
+    resetCameraFocus();
+  };
+
+  const closeSunPanel = () => {
+    if (sunSelectedRef.current) {
+      resetSunAppearance();
+      sunSelectedRef.current = false;
+    }
+    hoveredSunRef.current = false;
+    setSunHovered(false);
+    setSunInfoVisible(false);
+    resetCameraFocus();
+  };
+
+  const closeSpaceshipPanel = () => {
+    if (spaceshipSelectedRef.current) {
+      resetSpaceshipAppearance();
+      spaceshipSelectedRef.current = false;
+    }
+    hoveredSpaceshipRef.current = false;
+    setSpaceshipHovered(false);
+    setSpaceshipInfoVisible(false);
     resetCameraFocus();
   };
 
@@ -262,6 +463,20 @@ export default function App() {
         direction: initialOffset.clone().normalize(),
         distance: initialOffset.length(),
       };
+      const introDirection = defaultCameraStateRef.current.direction.clone();
+      const introDistance = Math.max(48, defaultCameraStateRef.current.distance * 0.45);
+      const introPosition = controls.target.clone().add(introDirection.multiplyScalar(introDistance));
+      camera.position.copy(introPosition);
+      if (controlsRef.current) {
+        controlsRef.current.update();
+      }
+      requestAnimationFrame(() => {
+        scheduleCameraFocus(defaultCameraStateRef.current.target.clone(), {
+          distance: defaultCameraStateRef.current.distance,
+          direction: defaultCameraStateRef.current.direction.clone(),
+          maintainFollow: false,
+        });
+      });
 
     const composer = new EffectComposer(renderer);
     composer.setPixelRatio(window.devicePixelRatio || 1);
@@ -501,45 +716,216 @@ export default function App() {
     const castRay = (type) => {
       const camera = cameraRef.current;
       const rendererInstance = rendererRef.current;
-      if (!camera || !rendererInstance || planetMeshesRef.current.length === 0) {
+      if (!camera || !rendererInstance || interactableMeshesRef.current.length === 0) {
         if (type === 'hover') {
           rendererInstance && (rendererInstance.domElement.style.cursor = 'default');
+          if (hoveredPlanetRef.current && hoveredPlanetRef.current !== selectedPlanetRef.current) {
+            resetPlanetAppearance(hoveredPlanetRef.current);
+            hoveredPlanetRef.current = null;
+          }
+          if (!sunSelectedRef.current && hoveredSunRef.current) {
+            resetSunAppearance();
+            hoveredSunRef.current = false;
+            setSunHovered(false);
+          }
           setHoveredRepo(null);
         }
         return;
       }
 
       raycasterRef.current.setFromCamera(pointerRef.current, camera);
-      const intersects = raycasterRef.current.intersectObjects(planetMeshesRef.current, false);
-      const hit = intersects.find((intersect) => intersect.object.userData.repo);
+      const intersects = raycasterRef.current.intersectObjects(interactableMeshesRef.current, false);
+
+      const spaceshipHit = intersects.find((intersect) => {
+        const data = intersect.object.userData || {};
+        return data.type === 'spaceship';
+      });
+
+      let hit = null;
+      if (spaceshipHit) {
+        hit = spaceshipHit;
+      } else {
+        hit = intersects.find((intersect) => {
+          const data = intersect.object.userData || {};
+          return data.type === 'sun' || data.repo;
+        });
+      }
 
       if (type === 'hover') {
         if (hit) {
-          const planet = hit.object;
-          if (hoveredPlanetRef.current && hoveredPlanetRef.current !== planet && hoveredPlanetRef.current !== selectedPlanetRef.current) {
-            resetPlanetAppearance(hoveredPlanetRef.current);
+          const target = hit.object;
+          const data = target.userData || {};
+          if (data.type === 'sun') {
+            if (!sunSelectedRef.current) {
+              emphasizeSun('hover');
+            } else {
+              emphasizeSun('selected');
+            }
+            if (hoveredPlanetRef.current && hoveredPlanetRef.current !== selectedPlanetRef.current) {
+              resetPlanetAppearance(hoveredPlanetRef.current);
+              hoveredPlanetRef.current = null;
+              setHoveredRepo(null);
+            }
+            if (hoveredSpaceshipRef.current && !spaceshipSelectedRef.current) {
+              resetSpaceshipAppearance();
+              hoveredSpaceshipRef.current = false;
+              setSpaceshipHovered(false);
+            }
+            hoveredSunRef.current = true;
+            setSunHovered(true);
+            rendererInstance.domElement.style.cursor = 'pointer';
+          } else if (data.type === 'spaceship') {
+            if (!spaceshipSelectedRef.current) {
+              emphasizeSpaceship('hover');
+            } else {
+              emphasizeSpaceship('selected');
+            }
+            if (hoveredPlanetRef.current && hoveredPlanetRef.current !== selectedPlanetRef.current) {
+              resetPlanetAppearance(hoveredPlanetRef.current);
+              hoveredPlanetRef.current = null;
+              setHoveredRepo(null);
+            }
+            if (hoveredSunRef.current && !sunSelectedRef.current) {
+              resetSunAppearance();
+              hoveredSunRef.current = false;
+              setSunHovered(false);
+            }
+            hoveredSpaceshipRef.current = true;
+            setSpaceshipHovered(true);
+            rendererInstance.domElement.style.cursor = 'pointer';
+          } else if (data.repo) {
+            if (hoveredPlanetRef.current && hoveredPlanetRef.current !== target && hoveredPlanetRef.current !== selectedPlanetRef.current) {
+              resetPlanetAppearance(hoveredPlanetRef.current);
+            }
+            if (target !== selectedPlanetRef.current) {
+              emphasizePlanet(target, { scale: 1.2, glowMultiplier: 2.1 });
+            } else {
+              emphasizePlanet(target, { scale: 1.32, glowMultiplier: 2.6 });
+            }
+            hoveredPlanetRef.current = target;
+            setHoveredRepo(target.userData.repo);
+            if (!sunSelectedRef.current && hoveredSunRef.current) {
+              resetSunAppearance();
+              hoveredSunRef.current = false;
+              setSunHovered(false);
+            }
+            if (!spaceshipSelectedRef.current && hoveredSpaceshipRef.current) {
+              resetSpaceshipAppearance();
+              hoveredSpaceshipRef.current = false;
+              setSpaceshipHovered(false);
+            }
+            rendererInstance.domElement.style.cursor = 'pointer';
           }
-          if (planet !== selectedPlanetRef.current) {
-            emphasizePlanet(planet, { scale: 1.2, glowMultiplier: 2.1 });
-          } else {
-            emphasizePlanet(planet, { scale: 1.32, glowMultiplier: 2.6 });
+        } else {
+          if (hoveredPlanetRef.current) {
+            if (hoveredPlanetRef.current !== selectedPlanetRef.current) {
+              resetPlanetAppearance(hoveredPlanetRef.current);
+            } else {
+              emphasizePlanet(hoveredPlanetRef.current, { scale: 1.32, glowMultiplier: 2.6 });
+            }
+            hoveredPlanetRef.current = null;
           }
-          hoveredPlanetRef.current = planet;
-          setHoveredRepo(planet.userData.repo);
-          rendererInstance.domElement.style.cursor = 'pointer';
-        } else if (hoveredPlanetRef.current) {
-          if (hoveredPlanetRef.current !== selectedPlanetRef.current) {
-            resetPlanetAppearance(hoveredPlanetRef.current);
-          } else {
-            emphasizePlanet(hoveredPlanetRef.current, { scale: 1.32, glowMultiplier: 2.6 });
+          if (!sunSelectedRef.current && hoveredSunRef.current) {
+            resetSunAppearance();
+            hoveredSunRef.current = false;
+            setSunHovered(false);
           }
-          hoveredPlanetRef.current = null;
+          if (!spaceshipSelectedRef.current && hoveredSpaceshipRef.current) {
+            resetSpaceshipAppearance();
+            hoveredSpaceshipRef.current = false;
+            setSpaceshipHovered(false);
+          }
           setHoveredRepo(null);
           rendererInstance.domElement.style.cursor = 'default';
         }
       } else if (type === 'click') {
         if (hit) {
-          const planet = hit.object;
+          const target = hit.object;
+          const data = target.userData || {};
+          if (data.type === 'sun') {
+            if (selectedPlanetRef.current) {
+              resetPlanetAppearance(selectedPlanetRef.current);
+              selectedPlanetRef.current = null;
+              hoveredPlanetRef.current = null;
+              setSelectedRepo(null);
+              setHoveredRepo(null);
+            }
+            if (spaceshipSelectedRef.current) {
+              resetSpaceshipAppearance();
+              spaceshipSelectedRef.current = false;
+              hoveredSpaceshipRef.current = false;
+              setSpaceshipInfoVisible(false);
+              setSpaceshipHovered(false);
+            }
+            if (sunSelectedRef.current) {
+              resetSunAppearance();
+              sunSelectedRef.current = false;
+              hoveredSunRef.current = false;
+              setSunInfoVisible(false);
+              setSunHovered(false);
+              resetCameraFocus();
+            } else {
+              sunSelectedRef.current = true;
+              hoveredSunRef.current = true;
+              emphasizeSun('selected');
+              setSunInfoVisible(true);
+              setSunHovered(true);
+              setHoveredRepo(null);
+              focusOnSun();
+            }
+            return;
+          }
+
+          if (data.type === 'spaceship') {
+            if (selectedPlanetRef.current) {
+              resetPlanetAppearance(selectedPlanetRef.current);
+              selectedPlanetRef.current = null;
+              hoveredPlanetRef.current = null;
+              setSelectedRepo(null);
+              setHoveredRepo(null);
+            }
+            if (sunSelectedRef.current) {
+              resetSunAppearance();
+              sunSelectedRef.current = false;
+              hoveredSunRef.current = false;
+              setSunInfoVisible(false);
+              setSunHovered(false);
+            }
+            if (spaceshipSelectedRef.current) {
+              resetSpaceshipAppearance();
+              spaceshipSelectedRef.current = false;
+              hoveredSpaceshipRef.current = false;
+              setSpaceshipInfoVisible(false);
+              setSpaceshipHovered(false);
+              resetCameraFocus();
+            } else {
+              spaceshipSelectedRef.current = true;
+              hoveredSpaceshipRef.current = true;
+              emphasizeSpaceship('selected');
+              setSpaceshipInfoVisible(true);
+              setSpaceshipHovered(true);
+              setHoveredRepo(null);
+              focusOnSpaceship();
+            }
+            return;
+          }
+
+          if (sunSelectedRef.current) {
+            resetSunAppearance();
+            sunSelectedRef.current = false;
+            hoveredSunRef.current = false;
+            setSunInfoVisible(false);
+            setSunHovered(false);
+          }
+          if (spaceshipSelectedRef.current) {
+            resetSpaceshipAppearance();
+            spaceshipSelectedRef.current = false;
+            hoveredSpaceshipRef.current = false;
+            setSpaceshipInfoVisible(false);
+            setSpaceshipHovered(false);
+          }
+
+          const planet = target;
           if (selectedPlanetRef.current && selectedPlanetRef.current !== planet) {
             resetPlanetAppearance(selectedPlanetRef.current);
           }
@@ -558,9 +944,25 @@ export default function App() {
             setHoveredRepo(planet.userData.repo);
             focusOnPlanet(planet);
           }
-        } else if (selectedPlanetRef.current) {
-          resetPlanetAppearance(selectedPlanetRef.current);
-          selectedPlanetRef.current = null;
+        } else {
+          if (selectedPlanetRef.current) {
+            resetPlanetAppearance(selectedPlanetRef.current);
+            selectedPlanetRef.current = null;
+          }
+          if (sunSelectedRef.current) {
+            resetSunAppearance();
+            sunSelectedRef.current = false;
+            hoveredSunRef.current = false;
+            setSunInfoVisible(false);
+            setSunHovered(false);
+          }
+          if (spaceshipSelectedRef.current) {
+            resetSpaceshipAppearance();
+            spaceshipSelectedRef.current = false;
+            hoveredSpaceshipRef.current = false;
+            setSpaceshipInfoVisible(false);
+            setSpaceshipHovered(false);
+          }
           setSelectedRepo(null);
           hoveredPlanetRef.current = null;
           setHoveredRepo(null);
@@ -586,6 +988,16 @@ export default function App() {
             resetPlanetAppearance(hoveredPlanetRef.current);
             hoveredPlanetRef.current = null;
             setHoveredRepo(null);
+          }
+          if (hoveredSunRef.current && !sunSelectedRef.current) {
+            resetSunAppearance();
+            hoveredSunRef.current = false;
+            setSunHovered(false);
+          }
+          if (hoveredSpaceshipRef.current && !spaceshipSelectedRef.current) {
+            resetSpaceshipAppearance();
+            hoveredSpaceshipRef.current = false;
+            setSpaceshipHovered(false);
           }
         }
       }
@@ -626,6 +1038,16 @@ export default function App() {
       if (hoveredPlanetRef.current && hoveredPlanetRef.current !== selectedPlanetRef.current) {
         resetPlanetAppearance(hoveredPlanetRef.current);
         hoveredPlanetRef.current = null;
+      }
+      if (hoveredSunRef.current && !sunSelectedRef.current) {
+        resetSunAppearance();
+        hoveredSunRef.current = false;
+        setSunHovered(false);
+      }
+      if (hoveredSpaceshipRef.current && !spaceshipSelectedRef.current) {
+        resetSpaceshipAppearance();
+        hoveredSpaceshipRef.current = false;
+        setSpaceshipHovered(false);
       }
       setHoveredRepo(null);
       const rendererInstance = rendererRef.current;
@@ -687,7 +1109,12 @@ export default function App() {
           moon.rotation.y += moon.userData.rotationSpeed;
           const satellite = moon.children[0];
           if (satellite) {
-            satellite.rotation.y += moon.userData.rotationSpeed * 1.5;
+            const satelliteData = satellite.userData || {};
+            if (typeof satelliteData.orbitSpeed === 'number') {
+              satellite.rotation.y += satelliteData.orbitSpeed;
+            } else {
+              satellite.rotation.y += moon.userData.rotationSpeed * 1.5;
+            }
           }
         }
       });
@@ -817,6 +1244,13 @@ export default function App() {
         selectedPlanetRef.current = null;
         setHoveredRepo(null);
         setSelectedRepo(null);
+        interactableMeshesRef.current = [];
+        sunRef.current = { core: null, halo: null, rim: null, group: null };
+        sunSelectedRef.current = false;
+        hoveredSunRef.current = false;
+        spaceshipRef.current = { mesh: null, group: null };
+        spaceshipSelectedRef.current = false;
+        hoveredSpaceshipRef.current = false;
       }
       container.removeChild(renderer.domElement);
       renderer.dispose();
@@ -831,7 +1265,15 @@ export default function App() {
         if (!active) {
           return;
         }
-        setRepos(data);
+        const sorted = [...data].sort((a, b) => {
+          const getTimestamp = (repo) => {
+            const candidates = [repo.updated_at, repo.pushed_at, repo.created_at];
+            const validDate = candidates.find((value) => value && !Number.isNaN(Date.parse(value)));
+            return validDate ? Date.parse(validDate) : 0;
+          };
+          return getTimestamp(b) - getTimestamp(a);
+        });
+        setRepos(sorted);
         setLoadingRepos(false);
       })
       .catch(() => {
@@ -840,6 +1282,59 @@ export default function App() {
         }
         setErrorRepos('No se pudieron cargar los repositorios.');
         setLoadingRepos(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    setLoadingExperiences(true);
+    fetchExperiences()
+      .then((data) => {
+        if (!active) {
+          return;
+        }
+        setExperiencesData(data);
+        setLoadingExperiences(false);
+      })
+      .catch(() => {
+        if (!active) {
+          return;
+        }
+        setErrorExperiences('No se pudieron cargar las experiencias laborales.');
+        setLoadingExperiences(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    setLoadingProfile(true);
+    setErrorProfile(null);
+    fetch('https://api.github.com/users/caagudelo')
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`GitHub profile request failed: ${response.status}`);
+        }
+        return response.json();
+      })
+      .then((data) => {
+        if (!active) {
+          return;
+        }
+        setProfileData(data);
+        setLoadingProfile(false);
+      })
+      .catch(() => {
+        if (!active) {
+          return;
+        }
+        setErrorProfile('No se pudo cargar el perfil de GitHub.');
+        setLoadingProfile(false);
       });
     return () => {
       active = false;
@@ -860,57 +1355,493 @@ export default function App() {
       setSelectedRepo(null);
       cameraFollowRef.current = null;
       cameraFocusRef.current = null;
+      sunRef.current = { core: null, halo: null, rim: null, group: null };
+      sunSelectedRef.current = false;
+      hoveredSunRef.current = false;
+      setSunHovered(false);
+      setSunInfoVisible(false);
+      interactableMeshesRef.current = [];
+      spaceshipRef.current = { mesh: null, group: null };
+      spaceshipSelectedRef.current = false;
+      hoveredSpaceshipRef.current = false;
+      setSpaceshipHovered(false);
+      setSpaceshipInfoVisible(false);
     }
-    const { group, planets } = createSolarSystem(repos);
+    const { group, planets, sun, spaceship } = createSolarSystem(repos);
     solarGroupRef.current = group;
     planetMeshesRef.current = planets;
+    sunRef.current = sun || { core: null, halo: null, rim: null, group: null };
+    spaceshipRef.current = spaceship || { mesh: null, group: null };
+    interactableMeshesRef.current = [...planets];
+    if (sun && sun.core) {
+      interactableMeshesRef.current.push(sun.core);
+    }
+    if (spaceship && spaceship.mesh) {
+      interactableMeshesRef.current.push(spaceship.mesh);
+    }
+    hoveredSunRef.current = false;
+    sunSelectedRef.current = false;
+    setSunHovered(false);
+    setSunInfoVisible(false);
+    hoveredSpaceshipRef.current = false;
+    spaceshipSelectedRef.current = false;
+    setSpaceshipHovered(false);
+    setSpaceshipInfoVisible(false);
     sceneRef.current.add(group);
   }, [repos]);
 
   return (
     <div style={{ width: '100vw', height: '100vh', overflow: 'hidden', background: '#050510', position: 'relative' }} ref={mountRef}>
-      <Navbar />
       <div id="info-panel" style={{
         position: 'absolute',
-        top: 80,
+        top: atlasCollapsed ? 40 : 80,
         left: '3%',
-        maxWidth: 320,
-        padding: '1.5rem',
+        maxWidth: atlasCollapsed ? 260 : 320,
+        padding: atlasCollapsed ? '1rem 1.2rem' : '1.5rem',
         background: 'rgba(10, 12, 24, 0.82)',
         border: '1px solid #00ffd0',
         borderRadius: '1.2rem',
         color: '#fff',
         zIndex: 16,
         pointerEvents: 'auto',
-        boxShadow: '0 6px 28px rgba(0,0,0,0.45)'
+        boxShadow: '0 6px 28px rgba(0,0,0,0.45)',
+        transition: 'all 0.25s ease',
       }}>
-        <h2 style={{margin:'0 0 0.6rem', fontSize:'1.4rem', color:'#00ffd0'}}>Atlas Galáctico</h2>
-        <p style={{margin:'0 0 0.8rem', fontSize:'0.95rem', lineHeight:1.4}}>
-          Explora tus repositorios representados como planetas. Desplaza el cursor para descubrirlos y haz clic para revelar sus detalles.
-        </p>
-        {loadingRepos && <p style={{color:'#8ea6ff'}}>Cargando constelaciones...</p>}
-        {errorRepos && <p style={{color:'#ff7185'}}>{errorRepos}</p>}
-        {!loadingRepos && !errorRepos && (
-          <div style={{fontSize:'0.9rem', lineHeight:1.5}}>
-            <div><strong>Repositorios:</strong> {portfolioStats.totalRepos}</div>
-            <div><strong>Stars:</strong> {portfolioStats.totalStars}</div>
-            <div><strong>Forks:</strong> {portfolioStats.totalForks}</div>
-            {portfolioStats.topLanguages.length > 0 && (
-              <div style={{marginTop:8}}>
-                <strong>Lenguajes destacados:</strong>
-                <div>
-                  {portfolioStats.topLanguages.map((entry) => (
-                    <span key={entry.language} style={{display:'inline-block', marginRight:8}}>
-                      {entry.language} ({entry.count})
-                    </span>
-                  ))}
+        <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:'0.75rem', marginBottom: atlasCollapsed ? 0 : '0.6rem'}}>
+          <h2 style={{margin:0, fontSize:'1.4rem', color:'#00ffd0'}}>Atlas Galáctico</h2>
+          <button
+            type="button"
+            onClick={() => setAtlasCollapsed((prev) => !prev)}
+            style={{
+              border: '1px solid rgba(0,255,208,0.45)',
+              background: 'rgba(0,255,208,0.08)',
+              color: '#00ffd0',
+              borderRadius: '0.8rem',
+              padding: '0.35rem 0.8rem',
+              fontSize: '0.78rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              letterSpacing: 0.35,
+            }}
+          >
+            {atlasCollapsed ? 'Expandir' : 'Minimizar'}
+          </button>
+        </div>
+        {atlasCollapsed ? (
+          <p style={{margin:0, fontSize:'0.82rem', color:'#c4d0ff'}}>
+            Panel comprimido. Selecciona "Expandir" para ver estadísticas y habilidades.
+          </p>
+        ) : (
+          <>
+            <div style={{display:'flex', flexDirection:'column', gap:'0.75rem', margin:'0 0 1rem'}}>
+              <p style={{margin:0, fontSize:'0.96rem', lineHeight:1.5}}>
+                Soy Camilo Agudelo, desarrollador de software que disfruta convertir ideas complejas en experiencias fluidas. Domino ecosistemas empresariales y creativos, desde APIs de alto rendimiento hasta interfaces inmersivas.
+              </p>
+              <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:'0.6rem'}}>
+                <div style={{padding:'0.65rem', borderRadius:'0.9rem', background:'rgba(0,255,208,0.08)', border:'1px solid rgba(0,255,208,0.22)'}}>
+                  <strong style={{display:'block', fontSize:'0.82rem', color:'#00ffd0', letterSpacing:0.35}}>Back-end</strong>
+                  <span style={{fontSize:'0.8rem', color:'#d7dcff'}}>C#, .NET, Java, Node.js, PHP</span>
+                </div>
+                <div style={{padding:'0.65rem', borderRadius:'0.9rem', background:'rgba(255,179,71,0.08)', border:'1px solid rgba(255,179,71,0.22)'}}>
+                  <strong style={{display:'block', fontSize:'0.82rem', color:'#ffb347', letterSpacing:0.35}}>Front-end</strong>
+                  <span style={{fontSize:'0.8rem', color:'#f7f0ff'}}>Angular, React, experiencias 3D</span>
+                </div>
+                <div style={{padding:'0.65rem', borderRadius:'0.9rem', background:'rgba(111,226,255,0.08)', border:'1px solid rgba(111,226,255,0.22)'}}>
+                  <strong style={{display:'block', fontSize:'0.82rem', color:'#6fe2ff', letterSpacing:0.35}}>Data & AI</strong>
+                  <span style={{fontSize:'0.8rem', color:'#e8f9ff'}}>Python, visión artificial, automatización</span>
+                </div>
+                <div style={{padding:'0.65rem', borderRadius:'0.9rem', background:'rgba(158,130,255,0.08)', border:'1px solid rgba(158,130,255,0.22)'}}>
+                  <strong style={{display:'block', fontSize:'0.82rem', color:'#9fc0ff', letterSpacing:0.35}}>Arquitectura</strong>
+                  <span style={{fontSize:'0.8rem', color:'#e1e5ff'}}>Diseño limpio, integración continua, soluciones escalables</span>
                 </div>
               </div>
+              <p style={{margin:0, fontSize:'0.92rem', lineHeight:1.45, color:'#c4d0ff'}}>
+                Cada planeta representa un repositorio clave. Recorre la órbita, identifica tecnologías y descubre cómo aplico estas habilidades en proyectos reales.
+              </p>
+            </div>
+            {loadingRepos && <p style={{color:'#8ea6ff'}}>Cargando constelaciones...</p>}
+            {errorRepos && <p style={{color:'#ff7185'}}>{errorRepos}</p>}
+            {!loadingRepos && !errorRepos && (
+              <div style={{fontSize:'0.9rem', lineHeight:1.5}}>
+                <div><strong>Repositorios:</strong> {portfolioStats.totalRepos}</div>
+                <div><strong>Stars:</strong> {portfolioStats.totalStars}</div>
+                <div><strong>Forks:</strong> {portfolioStats.totalForks}</div>
+                {portfolioStats.topLanguages.length > 0 && (
+                  <div style={{marginTop:8}}>
+                    <strong>Lenguajes destacados:</strong>
+                    <div>
+                      {portfolioStats.topLanguages.map((entry) => (
+                        <span key={entry.language} style={{display:'inline-block', marginRight:8}}>
+                          {entry.language} ({entry.count})
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
-          </div>
+          </>
         )}
       </div>
-      <Contact />
+      {sunHovered && !sunInfoVisible && (
+        <div style={{
+          position: 'absolute',
+          top: '18%',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          padding: '0.9rem 1.4rem',
+          background: 'rgba(10, 12, 24, 0.82)',
+          border: '1px solid #ffb347',
+          borderRadius: '0.9rem',
+          color: '#fff9f2',
+          zIndex: 18,
+          pointerEvents: 'none',
+          boxShadow: '0 6px 24px rgba(0,0,0,0.45)',
+          letterSpacing: 0.3,
+        }}>
+          Toca el sol para desplegar mi órbita profesional.
+        </div>
+      )}
+      {spaceshipHovered && !spaceshipInfoVisible && (
+        <div style={{
+          position: 'absolute',
+          top: '10%',
+          right: '4%',
+          padding: '0.8rem 1.3rem',
+          background: 'rgba(15, 20, 32, 0.85)',
+          border: '1px solid rgba(111, 226, 255, 0.75)',
+          borderRadius: '0.9rem',
+          color: '#e8f9ff',
+          zIndex: 19,
+          pointerEvents: 'none',
+          boxShadow: '0 6px 24px rgba(0,0,0,0.45)',
+          letterSpacing: 0.25,
+        }}>
+          Activa la nave para acceder a mis redes.
+        </div>
+      )}
+      {sunInfoVisible && (
+        <div style={{
+          position: 'absolute',
+          top: '14%',
+          right: '4%',
+          width: 'min(420px, 90vw)',
+          maxHeight: '70vh',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '1.1rem',
+          padding: '1.6rem',
+          background: 'linear-gradient(145deg, rgba(12,13,28,0.95) 0%, rgba(18,22,44,0.9) 100%)',
+          borderRadius: '1.4rem',
+          border: '1px solid rgba(255, 179, 71, 0.65)',
+          color: '#fff',
+          zIndex: 22,
+          boxShadow: '0 12px 36px rgba(0,0,0,0.48)',
+          backdropFilter: 'blur(8px)',
+        }}>
+          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+            <div>
+              <h3 style={{ margin: 0, color: '#ffb347', fontSize: '1.4rem' }}>Órbita Profesional</h3>
+              <p style={{ margin: '0.35rem 0 0', fontSize: '0.9rem', color: '#d7dcff' }}>Una trayectoria iluminada por proyectos y equipos memorables.</p>
+            </div>
+            <button
+              type="button"
+              onClick={closeSunPanel}
+              style={{
+                border: 'none',
+                background: 'rgba(255,255,255,0.08)',
+                color: '#ffb347',
+                width: 36,
+                height: 36,
+                borderRadius: '50%',
+                fontSize: '1.2rem',
+                cursor: 'pointer',
+              }}
+            >
+              X
+            </button>
+          </div>
+          {loadingProfile && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '1rem',
+              padding: '1rem',
+              borderRadius: '1.1rem',
+              border: '1px solid rgba(255,179,71,0.3)',
+              background: 'rgba(20, 24, 46, 0.65)',
+              color: '#ffd9a1',
+              fontSize: '0.9rem',
+            }}>
+              Cargando perfil...
+            </div>
+          )}
+          {!loadingProfile && errorProfile && (
+            <div style={{
+              padding: '1rem',
+              borderRadius: '1.1rem',
+              border: '1px solid rgba(255,124,124,0.6)',
+              background: 'rgba(52, 18, 22, 0.65)',
+              color: '#ff9fa7',
+              fontSize: '0.9rem',
+            }}>
+              {errorProfile}
+            </div>
+          )}
+          {!loadingProfile && !errorProfile && profileData && (
+            <div style={{
+              display: 'flex',
+              gap: '1.1rem',
+              alignItems: 'center',
+              padding: '1.1rem',
+              borderRadius: '1.2rem',
+              border: '1px solid rgba(255,179,71,0.35)',
+              background: 'rgba(18, 26, 48, 0.82)',
+              boxShadow: '0 8px 26px rgba(0,0,0,0.35)',
+            }}>
+              <img
+                src={profileData.avatar_url}
+                alt={profileData.name ? `Avatar de ${profileData.name}` : 'Avatar de perfil'}
+                style={{
+                  width: 82,
+                  height: 82,
+                  borderRadius: '50%',
+                  objectFit: 'cover',
+                  border: '2px solid rgba(255,179,71,0.5)',
+                  boxShadow: '0 0 18px rgba(255,179,71,0.4)'
+                }}
+              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                <div>
+                  <h4 style={{ margin: 0, fontSize: '1.2rem', color: '#ffcf86' }}>{profileData.name || profileData.login || 'Perfil sin nombre'}</h4>
+                  {profileData.login && (
+                    <p style={{ margin: '0.2rem 0 0', fontSize: '0.85rem', color: '#9fb5ff' }}>@{profileData.login}</p>
+                  )}
+                </div>
+                {profileData.bio && (
+                  <p style={{ margin: 0, fontSize: '0.85rem', lineHeight: 1.4, color: '#d7dcff' }}>{profileData.bio}</p>
+                )}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginTop: '0.3rem' }}>
+                  {profileData.location && (
+                    <span style={{
+                      padding: '0.3rem 0.6rem',
+                      borderRadius: '0.6rem',
+                      background: 'rgba(255,179,71,0.18)',
+                      color: '#ffd9a1',
+                      fontSize: '0.75rem',
+                      letterSpacing: 0.3,
+                    }}>
+                      {profileData.location}
+                    </span>
+                  )}
+                  {profileData.company && (
+                    <span style={{
+                      padding: '0.3rem 0.6rem',
+                      borderRadius: '0.6rem',
+                      background: 'rgba(0,255,208,0.15)',
+                      color: '#9fffe4',
+                      fontSize: '0.75rem',
+                      letterSpacing: 0.3,
+                    }}>
+                      {profileData.company}
+                    </span>
+                  )}
+                  {Number.isFinite(profileData.public_repos) && (
+                    <span style={{
+                      padding: '0.3rem 0.6rem',
+                      borderRadius: '0.6rem',
+                      background: 'rgba(111,226,255,0.15)',
+                      color: '#b4f0ff',
+                      fontSize: '0.75rem',
+                      letterSpacing: 0.3,
+                    }}>
+                      {profileData.public_repos} repos públicos
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => window.open('https://www.linkedin.com/in/camilo-andres-agudelo-b53728a2/', '_blank', 'noopener,noreferrer')}
+                  style={{
+                    alignSelf: 'flex-start',
+                    marginTop: '0.4rem',
+                    padding: '0.45rem 0.9rem',
+                    borderRadius: '0.7rem',
+                    border: '1px solid rgba(255,179,71,0.6)',
+                    background: 'rgba(255,179,71,0.18)',
+                    color: '#ffd9a1',
+                    fontSize: '0.8rem',
+                    cursor: 'pointer',
+                    fontWeight: 600,
+                    letterSpacing: 0.4,
+                  }}
+                >
+                  Ver perfil en LinkedIn ↗
+                </button>
+              </div>
+            </div>
+          )}
+          <div style={{
+            position: 'relative',
+            paddingLeft: '1rem',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '1rem',
+            overflowY: 'auto',
+            maxHeight: 'calc(70vh - 4.5rem)',
+          }}>
+            <span style={{
+              position: 'absolute',
+              left: '10px',
+              top: 0,
+              bottom: 0,
+              width: '2px',
+              background: 'linear-gradient(180deg, rgba(255,179,71,0.8) 0%, rgba(0,255,208,0.2) 100%)',
+              opacity: 0.65,
+            }} />
+            {loadingExperiences && (
+              <p style={{ color: '#ffd9a1', fontSize: '0.9rem' }}>Cargando trayectoria...</p>
+            )}
+            {!loadingExperiences && errorExperiences && (
+              <p style={{ color: '#ff8b94', fontSize: '0.9rem' }}>{errorExperiences}</p>
+            )}
+            {!loadingExperiences && !errorExperiences && experiencesTimeline.length === 0 && (
+              <p style={{ color: '#d7dcff', fontSize: '0.88rem' }}>Aún no hay experiencias registradas.</p>
+            )}
+            {!loadingExperiences && !errorExperiences && experiencesTimeline.length > 0 && experiencesTimeline.map((experienceEntry) => (
+              <div key={experienceEntry.id} style={{
+                position: 'relative',
+                padding: '0.9rem 1rem 0.9rem 1.4rem',
+                background: 'rgba(15, 18, 36, 0.78)',
+                borderRadius: '1rem',
+                border: '1px solid rgba(255,179,71,0.35)',
+                boxShadow: '0 10px 28px rgba(0,0,0,0.35)',
+              }}>
+                <span style={{
+                  position: 'absolute',
+                  left: '-0.55rem',
+                  top: '1.1rem',
+                  width: '0.9rem',
+                  height: '0.9rem',
+                  borderRadius: '50%',
+                  background: experienceEntry.isCurrent ? 'linear-gradient(135deg, #ffb347 0%, #00ffd0 100%)' : 'linear-gradient(135deg, #ff9a9e 0%, #fad0c4 100%)',
+                  boxShadow: '0 0 16px rgba(255,179,71,0.7)',
+                }} />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                  <span style={{ fontSize: '0.82rem', letterSpacing: 0.4, color: '#ffd9a1' }}>{experienceEntry.period}</span>
+                  <strong style={{ fontSize: '1.05rem', color: '#ffffff' }}>{experienceEntry.role}</strong>
+                  <span style={{ fontSize: '0.92rem', color: '#9fb5ff' }}>{experienceEntry.company}</span>
+                  <p style={{ margin: '0.45rem 0 0', fontSize: '0.88rem', lineHeight: 1.6, color: '#d7dcff' }}>{experienceEntry.description}</p>
+                  {experienceEntry.link && (
+                    <div style={{ marginTop: '0.6rem' }}>
+                      <a
+                        href={experienceEntry.link}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.35rem',
+                          color: '#00ffd0',
+                          textDecoration: 'none',
+                          fontSize: '0.82rem',
+                          fontWeight: 600,
+                        }}
+                      >
+                        Visitar compañía
+                        <span style={{ fontSize: '0.9rem' }}>↗</span>
+                      </a>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {spaceshipInfoVisible && (
+        <div style={{
+          position: 'absolute',
+          bottom: '8%',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          width: 'min(520px, 94vw)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '1.1rem',
+          padding: '1.8rem',
+          background: 'linear-gradient(145deg, rgba(10,17,32,0.92) 0%, rgba(18,28,52,0.88) 100%)',
+          borderRadius: '1.5rem',
+          border: '1px solid rgba(111, 226, 255, 0.6)',
+          color: '#eff6ff',
+          zIndex: 23,
+          boxShadow: '0 16px 42px rgba(0,0,0,0.55)',
+          backdropFilter: 'blur(10px)',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <h3 style={{ margin: 0, fontSize: '1.35rem', color: '#6fe2ff' }}>Bitácora de Contacto</h3>
+              <p style={{ margin: '0.4rem 0 0', fontSize: '0.9rem', color: '#c8e6ff' }}>
+                Elige un canal para conectar y seguir nuevas misiones.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={closeSpaceshipPanel}
+              style={{
+                border: 'none',
+                background: 'rgba(255,255,255,0.06)',
+                color: '#6fe2ff',
+                width: 36,
+                height: 36,
+                borderRadius: '50%',
+                fontSize: '1.1rem',
+                cursor: 'pointer',
+              }}
+            >
+              X
+            </button>
+          </div>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+            gap: '0.9rem',
+          }}>
+            {socialLinks.map((link) => (
+              <button
+                key={link.name}
+                type="button"
+                onClick={() => window.open(link.src, '_blank', 'noopener,noreferrer')}
+                style={{
+                  padding: '1rem',
+                  borderRadius: '1rem',
+                  border: '1px solid rgba(111, 226, 255, 0.45)',
+                  background: 'rgba(12, 22, 40, 0.9)',
+                  color: '#e8f9ff',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'flex-start',
+                  gap: '0.45rem',
+                  cursor: 'pointer',
+                  transition: 'transform 0.2s ease, box-shadow 0.2s ease',
+                }}
+                onMouseEnter={(event) => {
+                  event.currentTarget.style.transform = 'translateY(-4px)';
+                  event.currentTarget.style.boxShadow = '0 10px 24px rgba(111,226,255,0.25)';
+                }}
+                onMouseLeave={(event) => {
+                  event.currentTarget.style.transform = 'translateY(0)';
+                  event.currentTarget.style.boxShadow = 'none';
+                }}
+              >
+                <span style={{ fontSize: '0.82rem', letterSpacing: 0.35, color: '#6fe2ff' }}>Social</span>
+                <strong style={{ fontSize: '1rem' }}>{link.name}</strong>
+                <span style={{ fontSize: '0.75rem', color: '#bbdfff' }}>Abrir enlace ↗</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       {hoveredRepo && !selectedRepo && (
         <div style={{
           position: 'absolute',

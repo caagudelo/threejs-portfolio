@@ -4,7 +4,6 @@ import { createFresnelMaterial } from './fresnelMaterial';
 
 const textureCache = new Map();
 const nebulaTextureCache = new Map();
-
 function hashStringToSeed(value) {
   let hash = 2166136261;
   for (let i = 0; i < value.length; i += 1) {
@@ -230,10 +229,26 @@ export function createSolarSystem(repos) {
   group.userData.updatables = [];
 
   const sunSeed = repos[0] ? hashStringToSeed(`sun-${repos[0].id || repos[0].name}`) : 1337;
-  const { mesh: sun, halo: sunHalo, update: updateSun } = createSun(sunSeed);
+  const { mesh: sun, core: sunCore, halo: sunHalo, rim: sunRim, update: updateSun } = createSun(sunSeed);
   group.add(sun);
   group.add(sunHalo);
   group.userData.updatables.push(updateSun);
+
+  const ambientLight = new THREE.HemisphereLight(0x6880a8, 0x05070d, 0.42);
+  group.add(ambientLight);
+
+  sunCore.userData = {
+    type: 'sun',
+    group: sun,
+    halo: sunHalo,
+    rim: sunRim,
+    baseScale: 1,
+    highlightScale: 1.12,
+    baseHaloOpacity: sunHalo.material?.opacity ?? 0.09,
+    highlightHaloOpacity: Math.min(0.22, (sunHalo.material?.opacity ?? 0.09) + 0.1),
+    baseRimBias: sunRim.material?.uniforms?.fresnelBias?.value ?? 0.07,
+    highlightRimBias: (sunRim.material?.uniforms?.fresnelBias?.value ?? 0.07) + 0.04,
+  };
 
   const farNebula = createNebulaLayer({ seed: sunSeed ^ 0x9e3779b9, radius: 520, depth: -420, hue: 0.6, saturation: 0.45, spriteCount: 0, sizeRange: [90, 160] });
   const nearNebula = createNebulaLayer({ seed: sunSeed ^ 0x85ebca6b, radius: 420, depth: 360, hue: 0.05, saturation: 0.52, spriteCount: 0, sizeRange: [80, 150] });
@@ -354,7 +369,71 @@ export function createSolarSystem(repos) {
   group.add(belt.mesh);
   group.userData.updatables.push(belt.update);
 
-  return { group, planets };
+  const maxOrbitIndex = Math.min(5, Math.max(0, repos.length - 1));
+  const innerOrbitIndex = Math.max(0, maxOrbitIndex - 1);
+  let innerRadius = baseDistance + innerOrbitIndex * orbitalIncrement + 16;
+  let outerRadius = baseDistance + maxOrbitIndex * orbitalIncrement + 28;
+  let radiusBandLocked = false;
+
+  if (planets.length >= 3) {
+    const thirdRadius = planets[2].userData.radius;
+    const safeInnerLimit = planets.length > 0
+      ? Math.max(24, planets[0].userData.radius - 16)
+      : baseDistance * 0.82;
+    const targetOrbitRadius = Math.max(safeInnerLimit, thirdRadius - 44);
+    innerRadius = targetOrbitRadius;
+    outerRadius = targetOrbitRadius;
+    radiusBandLocked = true;
+  } else if (planets.length === 2) {
+    const secondRadius = planets[1].userData.radius;
+    innerRadius = Math.max(12, secondRadius - 10);
+    outerRadius = secondRadius + 10;
+  }
+
+  const safeInnerLimit = planets.length > 0
+    ? Math.max(24, planets[0].userData.radius - 16)
+    : baseDistance * 0.82;
+  innerRadius = Math.max(safeInnerLimit, innerRadius);
+  if (radiusBandLocked) {
+    outerRadius = innerRadius;
+  } else {
+    outerRadius = Math.max(innerRadius + 6, outerRadius);
+  }
+
+  const baseSpaceshipRadius = radiusBandLocked ? innerRadius : (innerRadius + outerRadius) / 2;
+  const spaceshipSpeed = radiusBandLocked && planets[2]
+    ? planets[2].userData.speed || 0.01
+    : 0.08;
+
+  const spaceshipOptions = {
+    seed: sunSeed ^ 0x27d4eb2f,
+    radius: baseSpaceshipRadius,
+    minRadius: innerRadius,
+    maxRadius: outerRadius,
+    speed: spaceshipSpeed,
+  };
+
+  if (radiusBandLocked && planets[2]) {
+    const targetAltitude = planets[2].userData.group?.position?.y || 0;
+    spaceshipOptions.altitude = targetAltitude;
+    spaceshipOptions.bobAmplitude = 0;
+    spaceshipOptions.bobSpeed = 0;
+  }
+
+  const spaceship = createSpaceship(spaceshipOptions);
+  group.add(spaceship.group);
+  group.userData.updatables.push(spaceship.update);
+
+  return {
+    group,
+    planets,
+    sun: { core: sunCore, halo: sunHalo, rim: sunRim, group: sun },
+    spaceship: {
+      group: spaceship.group,
+      mesh: spaceship.mesh,
+      thruster: spaceship.thruster,
+    },
+  };
 }
 
 function getOrbitalSpeed(radius) {
@@ -415,7 +494,7 @@ function createSun(seed) {
   const haloMaterial = new THREE.MeshBasicMaterial({ color: 0xffd78c, transparent: true, opacity: 0.09, blending: THREE.AdditiveBlending, side: THREE.BackSide, depthWrite: false });
   const halo = new THREE.Mesh(haloGeometry, haloMaterial);
 
-  const sunLight = new THREE.PointLight(0xfff0a8, 2.4, 0, 2);
+  const sunLight = new THREE.PointLight(0xfff0a8, 2, 420, 2);
   sunLight.position.set(0, 0, 0);
   core.add(sunLight);
 
@@ -440,10 +519,325 @@ function createSun(seed) {
     coronaMaterial.opacity = 0.11 + (Math.sin(elapsed * flickerSpeed) * 0.035 + 0.035);
     haloMaterial.opacity = 0.08 + Math.sin(elapsed * 0.6) * 0.025;
     rim.material.uniforms.fresnelBias.value = 0.07 + Math.sin(elapsed * 0.6) * 0.028;
-    sunLight.intensity = 2.3 + Math.sin(elapsed * 0.8) * 0.25;
+    sunLight.intensity = 2.15 + Math.sin(elapsed * 0.8) * 0.24;
   };
 
-  return { mesh: sunGroup, halo, update };
+  core.userData = core.userData || {};
+  core.userData.type = 'sun-core';
+
+  return { mesh: sunGroup, core, halo, rim, update };
+}
+
+function createSpaceship({
+  seed,
+  radius = 120,
+  minRadius = radius * 0.7,
+  maxRadius = radius * 1.3,
+  speed = 0.12,
+  altitude = 0,
+  bobAmplitude = 0.35,
+  bobSpeed = 0.32,
+}) {
+  const rng = createMulberry32(seed);
+  const group = new THREE.Group();
+  const shipRoot = new THREE.Group();
+  group.add(shipRoot);
+
+  const interactionMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(1, 24, 24),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false })
+  );
+  shipRoot.add(interactionMesh);
+
+  const engineGlowMaterial = new THREE.MeshBasicMaterial({
+    color: 0x8dfbff,
+    transparent: true,
+    opacity: 0.5,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const engineGlow = new THREE.Mesh(new THREE.ConeGeometry(3.4, 5.6, 24, 1, true), engineGlowMaterial);
+
+  const beaconLight = new THREE.PointLight(0x88f4ff, 1.6, 52, 2);
+  beaconLight.position.set(0, 1.2, 2.4);
+  shipRoot.add(beaconLight);
+
+  const accentLight = new THREE.PointLight(0x9c46ff, 1.1, 56, 2);
+  accentLight.position.set(0, 1.8, 0.6);
+  shipRoot.add(accentLight);
+
+  const keyLight = new THREE.PointLight(0xffffff, 2.2, 120, 2);
+  keyLight.position.set(6, 4.5, 9);
+  shipRoot.add(keyLight);
+
+  const fillLight = new THREE.PointLight(0x7ab8ff, 1.2, 110, 2);
+  fillLight.position.set(-5, 3.6, -6.5);
+  shipRoot.add(fillLight);
+
+  const baseScale = 1;
+  shipRoot.scale.setScalar(baseScale);
+
+  const emissiveTargets = [];
+
+  const baseRadius = radius;
+  const radiusBandLocked = Math.abs(maxRadius - minRadius) < 1e-3;
+  let minAllowedRadius = Math.max(12, Math.min(minRadius, maxRadius));
+  let maxAllowedRadius = Math.max(minAllowedRadius + 4, maxRadius);
+  if (radiusBandLocked) {
+    minAllowedRadius = baseRadius;
+    maxAllowedRadius = baseRadius;
+  }
+  const radialJitter = radiusBandLocked ? 0 : 0.12 + rng() * 0.08;
+  const lateralSway = radiusBandLocked ? 0 : baseRadius * (0.03 + rng() * 0.02);
+  const drift = radiusBandLocked
+    ? new THREE.Vector3(0, 0, 0)
+    : new THREE.Vector3(
+      (rng() - 0.5) * baseRadius * 0.25,
+      0,
+      (rng() - 0.5) * baseRadius * 0.25,
+    );
+  const baseAngularSpeed = Math.max(0.0002, speed);
+  const orbitAngularSpeed = radiusBandLocked ? baseAngularSpeed : baseAngularSpeed + rng() * 0.012;
+  const freqX = radiusBandLocked ? orbitAngularSpeed : baseAngularSpeed + rng() * 0.012;
+  const freqZ = radiusBandLocked ? orbitAngularSpeed : baseAngularSpeed * 0.92 + rng() * 0.012;
+  const freqRadius = radiusBandLocked ? 0 : 0.02 + rng() * 0.02;
+  const freqYaw = radiusBandLocked ? 0.035 + rng() * 0.015 : 0.05 + rng() * 0.04;
+  const phaseX = rng() * Math.PI * 2;
+  const phaseZ = rng() * Math.PI * 2;
+  const phaseRadius = rng() * Math.PI * 2;
+  const phaseYaw = rng() * Math.PI * 2;
+
+  const navigationState = {
+    prevPosition: new THREE.Vector3(),
+    currentPosition: new THREE.Vector3(),
+    velocity: new THREE.Vector3(),
+    planar: new THREE.Vector2(),
+    initialized: false,
+    angle: rng() * Math.PI * 2,
+  };
+
+  const bodyGroup = new THREE.Group();
+
+  const hullMaterial = new THREE.MeshStandardMaterial({
+    color: 0x6fa5ff,
+    metalness: 0.32,
+    roughness: 0.42,
+    emissive: new THREE.Color(0x0a1d3a),
+    emissiveIntensity: 0.34,
+  });
+  const noseMaterial = new THREE.MeshStandardMaterial({
+    color: 0x9ad1ff,
+    metalness: 0.24,
+    roughness: 0.38,
+    emissive: new THREE.Color(0x123c58),
+    emissiveIntensity: 0.32,
+  });
+  const wingMaterial = new THREE.MeshStandardMaterial({
+    color: 0x234663,
+    metalness: 0.18,
+    roughness: 0.58,
+    emissive: new THREE.Color(0x0d2535),
+    emissiveIntensity: 0.28,
+  });
+  const detailMaterial = new THREE.MeshStandardMaterial({
+    color: 0x1e273a,
+    metalness: 0.4,
+    roughness: 0.3,
+    emissive: new THREE.Color(0x152340),
+    emissiveIntensity: 0.38,
+  });
+  const canopyMaterial = new THREE.MeshStandardMaterial({
+    color: 0x7fe6ff,
+    metalness: 0.08,
+    roughness: 0.18,
+    emissive: new THREE.Color(0x1f6e9d),
+    emissiveIntensity: 0.6,
+    transparent: true,
+    opacity: 0.76,
+  });
+
+  [hullMaterial, noseMaterial, wingMaterial, detailMaterial, canopyMaterial].forEach((material) => {
+    emissiveTargets.push({ material, base: material.emissiveIntensity ?? 0.3 });
+  });
+
+  const fuselage = new THREE.Mesh(new THREE.CylinderGeometry(3.4, 4.8, 22, 32, 1, false), hullMaterial);
+  fuselage.rotation.z = Math.PI / 2;
+  bodyGroup.add(fuselage);
+
+  const nose = new THREE.Mesh(new THREE.ConeGeometry(4.4, 10, 32), noseMaterial);
+  nose.rotation.z = Math.PI / 2;
+  nose.position.set(11.8, 0, 0);
+  bodyGroup.add(nose);
+
+  const tail = new THREE.Mesh(new THREE.ConeGeometry(3.4, 8.5, 28, 1, true), detailMaterial);
+  tail.rotation.z = -Math.PI / 2;
+  tail.position.set(-11.2, 0, 0);
+  bodyGroup.add(tail);
+
+  const thruster = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 3.8, 6, 24, 1, true), detailMaterial.clone());
+  thruster.rotation.z = Math.PI / 2;
+  thruster.position.set(-13.4, 0, 0);
+  bodyGroup.add(thruster);
+  emissiveTargets.push({ material: thruster.material, base: thruster.material.emissiveIntensity ?? 0.32 });
+
+  engineGlow.rotation.z = Math.PI / 2;
+  engineGlow.position.set(-15.6, 0, 0);
+  bodyGroup.add(engineGlow);
+
+  const canopy = new THREE.Mesh(new THREE.SphereGeometry(3.1, 24, 20, 0, Math.PI), canopyMaterial);
+  canopy.rotation.set(0, 0, Math.PI / 2);
+  canopy.position.set(2.4, 2.6, 0);
+  bodyGroup.add(canopy);
+
+  const wingGeometry = new THREE.BoxGeometry(10.5, 0.7, 6.2);
+  const leftWing = new THREE.Mesh(wingGeometry, wingMaterial);
+  leftWing.position.set(-0.5, -1.6, 6.5);
+  leftWing.rotation.set(0.08, 0.25, -0.12);
+  bodyGroup.add(leftWing);
+
+  const rightWing = leftWing.clone();
+  rightWing.position.z *= -1;
+  rightWing.rotation.y *= -1;
+  rightWing.rotation.z *= -1;
+  bodyGroup.add(rightWing);
+
+  const tailWing = new THREE.Mesh(new THREE.BoxGeometry(0.9, 5.6, 4.2), wingMaterial.clone());
+  tailWing.position.set(-9.2, 2.6, 0);
+  bodyGroup.add(tailWing);
+  emissiveTargets.push({ material: tailWing.material, base: tailWing.material.emissiveIntensity ?? 0.28 });
+
+  const intake = new THREE.Mesh(new THREE.TorusGeometry(3.6, 0.5, 16, 24), detailMaterial.clone());
+  intake.rotation.y = Math.PI / 2;
+  intake.position.set(4.8, -1.2, 0);
+  bodyGroup.add(intake);
+  emissiveTargets.push({ material: intake.material, base: intake.material.emissiveIntensity ?? 0.34 });
+
+  const accentStrip = new THREE.Mesh(new THREE.BoxGeometry(7.4, 0.4, 2.2), hullMaterial.clone());
+  accentStrip.material.emissiveIntensity = 0.48;
+  accentStrip.position.set(0.5, -1.4, 0);
+  bodyGroup.add(accentStrip);
+  emissiveTargets.push({ material: accentStrip.material, base: accentStrip.material.emissiveIntensity });
+
+  bodyGroup.traverse((child) => {
+    if (child.isMesh) {
+      child.castShadow = true;
+      child.receiveShadow = true;
+    }
+  });
+
+  shipRoot.add(bodyGroup);
+
+  bodyGroup.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(bodyGroup);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  bodyGroup.position.sub(center);
+
+  const hitRadius = Math.max(size.x, size.y, size.z) * 0.55;
+  interactionMesh.scale.setScalar(hitRadius);
+
+  beaconLight.position.set(0, size.y * 0.55, size.z * 0.34);
+  accentLight.position.set(size.x * 0.18, size.y * 0.32, 0);
+  keyLight.position.set(size.x * 0.62, size.y * 0.46, size.z * 0.74);
+  fillLight.position.set(-size.x * 0.6, size.y * 0.42, -size.z * 0.68);
+
+  shipRoot.userData.emissiveTargets = emissiveTargets;
+
+  const orbitNormal = new THREE.Vector3(0, 1, 0);
+  const forwardReference = new THREE.Vector3(0, 0, 1);
+  const rollAxis = new THREE.Vector3(0, 0, 1);
+  const rollAmplitude = radiusBandLocked ? 0.08 : 0.18;
+
+  const update = (elapsed) => {
+    let x;
+    let y;
+    let z;
+
+    if (radiusBandLocked) {
+      navigationState.angle += orbitAngularSpeed;
+      const radialDistance = baseRadius;
+      x = Math.cos(navigationState.angle) * radialDistance;
+      z = Math.sin(navigationState.angle) * radialDistance;
+      y = altitude;
+    } else {
+      const radialScale = 1 + Math.sin(elapsed * freqRadius + phaseRadius) * radialJitter;
+      const clampedScale = Math.max(0.6, radialScale);
+      const radialDistance = THREE.MathUtils.clamp(baseRadius * clampedScale, minAllowedRadius, maxAllowedRadius);
+      const swayComponent = Math.sin(elapsed * freqYaw * 0.5 + phaseYaw) * lateralSway;
+      x = Math.cos(elapsed * freqX + phaseX) * radialDistance + drift.x + swayComponent;
+      z = Math.sin(elapsed * freqZ + phaseZ) * radialDistance + drift.z + Math.cos(elapsed * freqYaw * 0.5 + phaseYaw) * lateralSway;
+      y = altitude + Math.sin(elapsed * bobSpeed + phaseYaw) * bobAmplitude;
+    }
+
+    navigationState.currentPosition.set(x, y, z);
+    shipRoot.position.copy(navigationState.currentPosition);
+
+    if (navigationState.initialized) {
+      navigationState.velocity.copy(navigationState.currentPosition).sub(navigationState.prevPosition);
+      if (navigationState.velocity.lengthSq() > 1e-6) {
+        const forward = navigationState.velocity.clone().normalize();
+        const quaternion = new THREE.Quaternion().setFromUnitVectors(forwardReference, forward);
+        shipRoot.setRotationFromQuaternion(quaternion);
+        shipRoot.rotateOnAxis(orbitNormal, Math.PI / 2);
+        shipRoot.rotateOnAxis(rollAxis, Math.sin(elapsed * freqYaw + phaseYaw) * rollAmplitude);
+      }
+    } else {
+      navigationState.initialized = true;
+    }
+
+    navigationState.prevPosition.copy(navigationState.currentPosition);
+
+    const highlighted = shipRoot.userData.highlighted;
+    const glowPulse = 0.32 + Math.sin(elapsed * 3.1) * 0.12 + (highlighted ? 0.22 : 0);
+    if (engineGlowMaterial) {
+      engineGlowMaterial.opacity = THREE.MathUtils.clamp(glowPulse, 0.18, highlighted ? 0.78 : 0.58);
+    }
+    const beaconBase = 1.05 + Math.sin(elapsed * 4) * 0.32;
+    beaconLight.intensity = highlighted ? beaconBase + 0.45 : beaconBase;
+    const accentBase = 0.65 + Math.sin(elapsed * 2.4) * 0.18;
+    accentLight.intensity = highlighted ? accentBase + 0.25 : accentBase;
+    const keyBase = 1.8 + Math.sin(elapsed * 1.6) * 0.36;
+    keyLight.intensity = highlighted ? keyBase + 0.4 : keyBase;
+    const fillBase = 1 + Math.sin(elapsed * 1.9 + 0.8) * 0.22;
+    fillLight.intensity = highlighted ? fillBase + 0.26 : fillBase;
+
+    const emissives = shipRoot.userData.emissiveTargets;
+    if (Array.isArray(emissives)) {
+      emissives.forEach((entry) => {
+        entry.material.emissiveIntensity = entry.base + (highlighted ? 0.35 : 0.12);
+      });
+    }
+  };
+
+  const sharedUserData = {
+    type: 'spaceship',
+    group,
+    root: shipRoot,
+    baseScale,
+    highlightScale: baseScale * 1.24,
+    engineGlowMaterial,
+    beaconLight,
+    accentLight,
+    emissiveTargets,
+    keyLight,
+    fillLight,
+    highlighted: false,
+  };
+
+  shipRoot.userData = sharedUserData;
+  interactionMesh.userData = sharedUserData;
+
+  group.position.set(0, 0, 0);
+
+  update(0);
+
+  return {
+    group,
+    mesh: interactionMesh,
+    thruster: engineGlow,
+    update,
+  };
 }
 
 function createNebulaLayer({ seed, radius = 420, depth = 0, hue = 0.6, saturation = 0.6, spriteCount = 12, sizeRange = [120, 220] }) {
