@@ -1,5 +1,5 @@
 
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -85,6 +85,39 @@ export default function App() {
   }), [viewportWidth]);
 
   const { isTablet, isMobile, isCompact } = layoutFlags;
+
+  const adjustDistanceForLayout = useCallback((baseDistance) => {
+    if (!Number.isFinite(baseDistance)) {
+      return baseDistance;
+    }
+    if (isMobile) {
+      return Math.max(22, baseDistance * 0.7);
+    }
+    if (isTablet) {
+      return Math.max(26, baseDistance * 0.85);
+    }
+    return baseDistance;
+  }, [isMobile, isTablet]);
+
+  useEffect(() => {
+    const controls = controlsRef.current;
+    const camera = cameraRef.current;
+    if (!controls || !camera) {
+      return;
+    }
+    controls.enablePan = !isMobile;
+    controls.rotateSpeed = isMobile ? 0.32 : (isTablet ? 0.38 : 0.45);
+    controls.zoomSpeed = isMobile ? 0.6 : (isTablet ? 0.75 : 0.9);
+    controls.minDistance = isMobile ? 22 : (isTablet ? 24 : 28);
+    controls.maxDistance = isMobile ? 360 : (isTablet ? 540 : 900);
+    const distanceToTarget = camera.position.distanceTo(controls.target);
+    const clampedDistance = THREE.MathUtils.clamp(distanceToTarget, controls.minDistance, controls.maxDistance);
+    if (Number.isFinite(clampedDistance) && Math.abs(clampedDistance - distanceToTarget) > 0.01) {
+      const direction = new THREE.Vector3().subVectors(camera.position, controls.target).normalize();
+      camera.position.copy(controls.target).add(direction.multiplyScalar(clampedDistance));
+    }
+    controls.update();
+  }, [isMobile, isTablet]);
 
   const socialLinks = useMemo(() => ([
     { name: 'LinkedIn', src: 'https://www.linkedin.com/in/camilo-andres-agudelo-b53728a2/' },
@@ -297,6 +330,8 @@ export default function App() {
       desiredDistance = new THREE.Vector3().subVectors(camera.position, controls.target).length() || 60;
     }
 
+    desiredDistance = adjustDistanceForLayout(desiredDistance);
+
     const endTarget = targetVec.clone();
     const offset = offsetDir.clone().multiplyScalar(desiredDistance);
     const endPos = endTarget.clone().add(offset);
@@ -335,7 +370,8 @@ export default function App() {
     const worldPosition = new THREE.Vector3();
     planet.userData.group.getWorldPosition(worldPosition);
     const planetSize = planet.geometry?.parameters?.radius || 5;
-    const desiredDistance = Math.max(35, planetSize * 9);
+    const baseDistance = Math.max(32, planetSize * 9);
+    const desiredDistance = adjustDistanceForLayout(baseDistance);
     cameraFollowRef.current = null;
     scheduleCameraFocus(worldPosition, {
       distance: desiredDistance,
@@ -352,8 +388,9 @@ export default function App() {
     const worldPosition = new THREE.Vector3();
     sun.group.getWorldPosition(worldPosition);
     const customDirection = new THREE.Vector3(0.65, 0.38, 1).normalize();
+    const distance = adjustDistanceForLayout(78);
     scheduleCameraFocus(worldPosition, {
-      distance: 78,
+      distance,
       direction: customDirection,
       followPlanet: null,
       maintainFollow: false,
@@ -368,8 +405,9 @@ export default function App() {
     const worldPosition = new THREE.Vector3();
     spaceship.mesh.getWorldPosition(worldPosition);
     const offsetDirection = new THREE.Vector3(-0.4, 0.35, 1).normalize();
+    const distance = adjustDistanceForLayout(54);
     scheduleCameraFocus(worldPosition, {
-      distance: 54,
+      distance,
       direction: offsetDirection,
       followPlanet: null,
       maintainFollow: false,
@@ -497,6 +535,24 @@ export default function App() {
     const width = container.clientWidth;
     const height = container.clientHeight;
 
+    const computePixelRatio = () => {
+      if (typeof window === 'undefined') {
+        return 1;
+      }
+      const deviceRatio = window.devicePixelRatio || 1;
+      const screenWidth = window.innerWidth || width || 1280;
+      if (screenWidth <= 520) {
+        return Math.min(deviceRatio, 1.4);
+      }
+      if (screenWidth <= 768) {
+        return Math.min(deviceRatio, 1.6);
+      }
+      if (screenWidth <= 1024) {
+        return Math.min(deviceRatio, 1.9);
+      }
+      return Math.min(deviceRatio, 2.2);
+    };
+
     const scene = new THREE.Scene();
     sceneRef.current = scene;
 
@@ -505,7 +561,8 @@ export default function App() {
     cameraRef.current = camera;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setPixelRatio(window.devicePixelRatio);
+    const pixelRatio = computePixelRatio();
+    renderer.setPixelRatio(pixelRatio);
     renderer.setClearColor(0x050510, 1);
     renderer.setSize(width, height);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -553,7 +610,7 @@ export default function App() {
       });
 
     const composer = new EffectComposer(renderer);
-    composer.setPixelRatio(window.devicePixelRatio || 1);
+    composer.setPixelRatio(pixelRatio);
     const renderPass = new RenderPass(scene, camera);
     composer.addPass(renderPass);
     const bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 0.6, 0.4, 0.78);
@@ -574,7 +631,18 @@ export default function App() {
     scene.add(hemisphereLight);
     scene.add(pointLight);
 
-    const particles = 1300;
+    const particles = (() => {
+      if (typeof window === 'undefined') {
+        return 1300;
+      }
+      if (window.innerWidth <= 520) {
+        return 800;
+      }
+      if (window.innerWidth <= 768) {
+        return 1000;
+      }
+      return 1300;
+    })();
     const starGeometry = new THREE.BufferGeometry();
     const positions = new Float32Array(particles * 3);
     for (let i = 0; i < particles; i += 1) {
@@ -644,7 +712,7 @@ export default function App() {
     ];
 
     const galaxies = [];
-    const galaxyCount = 6;
+    const galaxyCount = (typeof window !== 'undefined' && window.innerWidth <= 768) ? 4 : 6;
     for (let i = 0; i < galaxyCount; i += 1) {
       const stops = galaxySpecs[i % galaxySpecs.length];
       const texture = createGalaxyTexture(stops);
@@ -738,7 +806,7 @@ export default function App() {
     };
 
     const meteorEntries = [];
-    const meteorCount = 6;
+    const meteorCount = (typeof window !== 'undefined' && window.innerWidth <= 768) ? 4 : 6;
     for (let i = 0; i < meteorCount; i += 1) {
       const meteor = new THREE.Group();
       const core = new THREE.Mesh(meteorGeometry, meteorMaterial);
@@ -773,11 +841,13 @@ export default function App() {
       }
       const newWidth = container.clientWidth;
       const newHeight = container.clientHeight;
+      const resizePixelRatio = computePixelRatio();
       cameraRef.current.aspect = newWidth / newHeight;
       cameraRef.current.updateProjectionMatrix();
+      rendererRef.current.setPixelRatio(resizePixelRatio);
       rendererRef.current.setSize(newWidth, newHeight);
       if (composerRef.current) {
-        composerRef.current.setPixelRatio(window.devicePixelRatio || 1);
+        composerRef.current.setPixelRatio(resizePixelRatio);
         composerRef.current.setSize(newWidth, newHeight);
       }
       if (bloomPassRef.current) {
@@ -1266,8 +1336,10 @@ export default function App() {
           const helpers = vectorHelpersRef.current;
           const targetPosition = helpers.target;
           planet.userData.group.getWorldPosition(targetPosition);
-          const isDragging = pointerStateRef.current.isDown && pointerStateRef.current.isDragging;
-          if (isDragging) {
+          const pointerState = pointerStateRef.current;
+          const isDragging = pointerState.isDown && pointerState.isDragging;
+          const isPinching = pointerState.pointerType === 'touch' && pointerState.multiTouch;
+          if (isDragging || isPinching) {
             follow.offset.copy(cameraRef.current.position).sub(controlsRef.current.target);
             controlsRef.current.target.copy(targetPosition);
           } else {
@@ -1764,12 +1836,12 @@ export default function App() {
           </>
         )}
       </div>
-      {sunHovered && !sunInfoVisible && (
+      {sunHovered && !sunInfoVisible && !isMobile && (
         <div style={sunHoverStyle}>
           Toca el sol para desplegar mi órbita profesional.
         </div>
       )}
-      {spaceshipHovered && !spaceshipInfoVisible && (
+      {spaceshipHovered && !spaceshipInfoVisible && !isMobile && (
         <div style={spaceshipHoverStyle}>
           Activa la nave para acceder a mis redes.
         </div>
@@ -2056,7 +2128,7 @@ export default function App() {
           </div>
         </div>
       )}
-      {hoveredRepo && !selectedRepo && (
+      {hoveredRepo && !selectedRepo && !isMobile && (
         <div style={hoveredRepoStyle}>
           <strong style={{color:'#00ffd0'}}>{hoveredRepo.name}</strong>
           <div style={{fontSize:isMobile ? '0.84rem' : '0.9rem', marginTop: '0.5rem'}}>{hoveredRepo.description || 'Sin descripción disponible.'}</div>
