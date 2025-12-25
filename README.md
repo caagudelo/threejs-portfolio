@@ -20,7 +20,7 @@ Un portafolio web inmersivo y moderno construido con **React**, **Three.js** y *
 *   **Core**: React 18, Vite.
 *   **3D Graphics**: Three.js, React Three Fiber (conceptos aplicados en vanilla Three.js dentro de React).
 *   **Post-Processing**: `EffectComposer`, `UnrealBloomPass`, `FilmPass`.
-*   **Routing**: React Router DOM v6.
+*   **Routing**: React Router DOM v6 (usando `HashRouter` para compatibilidad total con hosting compartido).
 *   **Estilos**: CSS Modules / Global CSS con diseño Glassmorphism.
 
 ## 🚀 Instalación y Despliegue
@@ -68,6 +68,9 @@ Un portafolio web inmersivo y moderno construido con **React**, **Three.js** y *
     ```bash
     npm run preview
     ```
+
+3.  **Nota sobre el Despliegue**:
+    El proyecto utiliza `HashRouter` (`/#/ruta`), lo que garantiza que la navegación funcione correctamente en cualquier hosting estático compartido (cPanel, GitHub Pages, Netlify) sin necesidad de configuraciones de servidor adicionales para reescritura de URLs.
 
 ## 📂 Estructura del Proyecto
 
