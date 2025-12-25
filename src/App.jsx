@@ -1,5 +1,6 @@
 
 import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -584,30 +585,30 @@ export default function App() {
     controls.panSpeed = 0.45;
     controlsRef.current = controls;
 
-      const initialOffset = camera.position.clone().sub(controls.target);
-      if (initialOffset.lengthSq() < 1e-6) {
-        initialOffset.set(0, 0.6, 1);
-      }
-      defaultCameraStateRef.current = {
-        position: camera.position.clone(),
-        target: controls.target.clone(),
-        direction: initialOffset.clone().normalize(),
-        distance: initialOffset.length(),
-      };
-      const introDirection = defaultCameraStateRef.current.direction.clone();
-      const introDistance = Math.max(48, defaultCameraStateRef.current.distance * 0.45);
-      const introPosition = controls.target.clone().add(introDirection.multiplyScalar(introDistance));
-      camera.position.copy(introPosition);
-      if (controlsRef.current) {
-        controlsRef.current.update();
-      }
-      requestAnimationFrame(() => {
-        scheduleCameraFocus(defaultCameraStateRef.current.target.clone(), {
-          distance: defaultCameraStateRef.current.distance,
-          direction: defaultCameraStateRef.current.direction.clone(),
-          maintainFollow: false,
-        });
+    const initialOffset = camera.position.clone().sub(controls.target);
+    if (initialOffset.lengthSq() < 1e-6) {
+      initialOffset.set(0, 0.6, 1);
+    }
+    defaultCameraStateRef.current = {
+      position: camera.position.clone(),
+      target: controls.target.clone(),
+      direction: initialOffset.clone().normalize(),
+      distance: initialOffset.length(),
+    };
+    const introDirection = defaultCameraStateRef.current.direction.clone();
+    const introDistance = Math.max(48, defaultCameraStateRef.current.distance * 0.45);
+    const introPosition = controls.target.clone().add(introDirection.multiplyScalar(introDistance));
+    camera.position.copy(introPosition);
+    if (controlsRef.current) {
+      controlsRef.current.update();
+    }
+    requestAnimationFrame(() => {
+      scheduleCameraFocus(defaultCameraStateRef.current.target.clone(), {
+        distance: defaultCameraStateRef.current.distance,
+        direction: defaultCameraStateRef.current.direction.clone(),
+        maintainFollow: false,
       });
+    });
 
     const composer = new EffectComposer(renderer);
     composer.setPixelRatio(pixelRatio);
@@ -1786,51 +1787,56 @@ export default function App() {
           </p>
         ) : (
           <>
-            <div style={{display:'flex', flexDirection:'column', gap:isMobile ? '0.65rem' : '0.75rem', margin:'0 0 1rem'}}>
-              <p style={{margin:0, fontSize:isMobile ? '0.9rem' : '0.96rem', lineHeight:1.5}}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: isMobile ? '0.65rem' : '0.75rem', margin: '0 0 1rem' }}>
+              <p style={{ margin: 0, fontSize: isMobile ? '0.9rem' : '0.96rem', lineHeight: 1.5 }}>
                 Soy Camilo Agudelo, desarrollador de software que disfruta convertir ideas complejas en experiencias fluidas. Domino ecosistemas empresariales y creativos, desde APIs de alto rendimiento hasta interfaces inmersivas.
               </p>
               <div style={atlasSkillsGridStyle}>
-                <div style={{padding:isMobile ? '0.55rem 0.65rem' : '0.65rem', borderRadius:isMobile ? '0.8rem' : '0.9rem', background:'rgba(0,255,208,0.08)', border:'1px solid rgba(0,255,208,0.22)'}}>
-                  <strong style={{display:'block', fontSize:isMobile ? '0.78rem' : '0.82rem', color:'#00ffd0', letterSpacing:0.35}}>Back-end</strong>
-                  <span style={{fontSize:isMobile ? '0.78rem' : '0.8rem', color:'#d7dcff'}}>C#, .NET, Java, Node.js, PHP</span>
+                <div style={{ padding: isMobile ? '0.55rem 0.65rem' : '0.65rem', borderRadius: isMobile ? '0.8rem' : '0.9rem', background: 'rgba(0,255,208,0.08)', border: '1px solid rgba(0,255,208,0.22)' }}>
+                  <strong style={{ display: 'block', fontSize: isMobile ? '0.78rem' : '0.82rem', color: '#00ffd0', letterSpacing: 0.35 }}>Back-end</strong>
+                  <span style={{ fontSize: isMobile ? '0.78rem' : '0.8rem', color: '#d7dcff' }}>C#, .NET, Java, Node.js, PHP</span>
                 </div>
-                <div style={{padding:isMobile ? '0.55rem 0.65rem' : '0.65rem', borderRadius:isMobile ? '0.8rem' : '0.9rem', background:'rgba(255,179,71,0.08)', border:'1px solid rgba(255,179,71,0.22)'}}>
-                  <strong style={{display:'block', fontSize:isMobile ? '0.78rem' : '0.82rem', color:'#ffb347', letterSpacing:0.35}}>Front-end</strong>
-                  <span style={{fontSize:isMobile ? '0.78rem' : '0.8rem', color:'#f7f0ff'}}>Angular, React, experiencias 3D</span>
+                <div style={{ padding: isMobile ? '0.55rem 0.65rem' : '0.65rem', borderRadius: isMobile ? '0.8rem' : '0.9rem', background: 'rgba(255,179,71,0.08)', border: '1px solid rgba(255,179,71,0.22)' }}>
+                  <strong style={{ display: 'block', fontSize: isMobile ? '0.78rem' : '0.82rem', color: '#ffb347', letterSpacing: 0.35 }}>Front-end</strong>
+                  <span style={{ fontSize: isMobile ? '0.78rem' : '0.8rem', color: '#f7f0ff' }}>Angular, React, experiencias 3D</span>
                 </div>
-                <div style={{padding:isMobile ? '0.55rem 0.65rem' : '0.65rem', borderRadius:isMobile ? '0.8rem' : '0.9rem', background:'rgba(111,226,255,0.08)', border:'1px solid rgba(111,226,255,0.22)'}}>
-                  <strong style={{display:'block', fontSize:isMobile ? '0.78rem' : '0.82rem', color:'#6fe2ff', letterSpacing:0.35}}>Data & AI</strong>
-                  <span style={{fontSize:isMobile ? '0.78rem' : '0.8rem', color:'#e8f9ff'}}>Python, visión artificial, automatización</span>
+                <div style={{ padding: isMobile ? '0.55rem 0.65rem' : '0.65rem', borderRadius: isMobile ? '0.8rem' : '0.9rem', background: 'rgba(111,226,255,0.08)', border: '1px solid rgba(111,226,255,0.22)' }}>
+                  <strong style={{ display: 'block', fontSize: isMobile ? '0.78rem' : '0.82rem', color: '#6fe2ff', letterSpacing: 0.35 }}>Data & AI</strong>
+                  <span style={{ fontSize: isMobile ? '0.78rem' : '0.8rem', color: '#e8f9ff' }}>Python, visión artificial, automatización</span>
                 </div>
-                <div style={{padding:isMobile ? '0.55rem 0.65rem' : '0.65rem', borderRadius:isMobile ? '0.8rem' : '0.9rem', background:'rgba(158,130,255,0.08)', border:'1px solid rgba(158,130,255,0.22)'}}>
-                  <strong style={{display:'block', fontSize:isMobile ? '0.78rem' : '0.82rem', color:'#9fc0ff', letterSpacing:0.35}}>Arquitectura</strong>
-                  <span style={{fontSize:isMobile ? '0.78rem' : '0.8rem', color:'#e1e5ff'}}>Diseño limpio, integración continua, soluciones escalables</span>
+                <div style={{ padding: isMobile ? '0.55rem 0.65rem' : '0.65rem', borderRadius: isMobile ? '0.8rem' : '0.9rem', background: 'rgba(158,130,255,0.08)', border: '1px solid rgba(158,130,255,0.22)' }}>
+                  <strong style={{ display: 'block', fontSize: isMobile ? '0.78rem' : '0.82rem', color: '#9fc0ff', letterSpacing: 0.35 }}>Arquitectura</strong>
+                  <span style={{ fontSize: isMobile ? '0.78rem' : '0.8rem', color: '#e1e5ff' }}>Diseño limpio, integración continua, soluciones escalables</span>
                 </div>
               </div>
-              <p style={{margin:0, fontSize:isMobile ? '0.86rem' : '0.92rem', lineHeight:1.45, color:'#c4d0ff'}}>
+              <p style={{ margin: 0, fontSize: isMobile ? '0.86rem' : '0.92rem', lineHeight: 1.45, color: '#c4d0ff' }}>
                 Cada planeta representa un repositorio clave. Recorre la órbita, identifica tecnologías y descubre cómo aplico estas habilidades en proyectos reales.
               </p>
             </div>
-            {loadingRepos && <p style={{color:'#8ea6ff'}}>Cargando constelaciones...</p>}
-            {errorRepos && <p style={{color:'#ff7185'}}>{errorRepos}</p>}
+            {loadingRepos && <p style={{ color: '#8ea6ff' }}>Cargando constelaciones...</p>}
+            {errorRepos && <p style={{ color: '#ff7185' }}>{errorRepos}</p>}
             {!loadingRepos && !errorRepos && (
-              <div style={{fontSize:isMobile ? '0.86rem' : '0.9rem', lineHeight:1.5}}>
+              <div style={{ fontSize: isMobile ? '0.86rem' : '0.9rem', lineHeight: 1.5 }}>
                 <div><strong>Repositorios:</strong> {portfolioStats.totalRepos}</div>
                 <div><strong>Stars:</strong> {portfolioStats.totalStars}</div>
                 <div><strong>Forks:</strong> {portfolioStats.totalForks}</div>
                 {portfolioStats.topLanguages.length > 0 && (
-                  <div style={{marginTop:8}}>
+                  <div style={{ marginTop: 8 }}>
                     <strong>Lenguajes destacados:</strong>
                     <div>
                       {portfolioStats.topLanguages.map((entry) => (
-                        <span key={entry.language} style={{display:'inline-block', marginRight:8}}>
+                        <span key={entry.language} style={{ display: 'inline-block', marginRight: 8 }}>
                           {entry.language} ({entry.count})
                         </span>
                       ))}
                     </div>
                   </div>
                 )}
+                <div style={{ marginTop: '1rem', paddingTop: '0.8rem', borderTop: '1px solid rgba(0, 255, 208, 0.2)' }}>
+                  <Link to="/privacy-policy" style={{ color: '#8ea6ff', fontSize: '0.8rem', textDecoration: 'none', display: 'inline-block' }}>
+                    Política de Privacidad
+                  </Link>
+                </div>
               </div>
             )}
           </>
@@ -1848,7 +1854,7 @@ export default function App() {
       )}
       {sunInfoVisible && (
         <div style={sunInfoPanelStyle}>
-          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.6rem'}}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.6rem' }}>
             <div>
               <h3 style={{ margin: 0, color: '#ffb347', fontSize: isMobile ? '1.28rem' : '1.4rem' }}>Órbita Profesional</h3>
               <p style={{ margin: '0.35rem 0 0', fontSize: isMobile ? '0.86rem' : '0.9rem', color: '#d7dcff' }}>Una trayectoria iluminada por proyectos y equipos memorables.</p>
@@ -2130,27 +2136,27 @@ export default function App() {
       )}
       {hoveredRepo && !selectedRepo && !isMobile && (
         <div style={hoveredRepoStyle}>
-          <strong style={{color:'#00ffd0'}}>{hoveredRepo.name}</strong>
-          <div style={{fontSize:isMobile ? '0.84rem' : '0.9rem', marginTop: '0.5rem'}}>{hoveredRepo.description || 'Sin descripción disponible.'}</div>
+          <strong style={{ color: '#00ffd0' }}>{hoveredRepo.name}</strong>
+          <div style={{ fontSize: isMobile ? '0.84rem' : '0.9rem', marginTop: '0.5rem' }}>{hoveredRepo.description || 'Sin descripción disponible.'}</div>
         </div>
       )}
       {selectedRepo && (
         <div style={selectedRepoStyle}>
-          <h3 style={{marginTop:0, color:'#00ffd0', fontSize: isMobile ? '1.05rem' : '1.15rem'}}>{selectedRepo.name}</h3>
-          <p style={{fontSize:isMobile ? '0.88rem' : '0.95rem'}}>{selectedRepo.description || 'Sin descripción disponible.'}</p>
-          <p style={{fontSize:isMobile ? '0.8rem' : '0.85rem', marginBottom:'0.5rem'}}>Lenguaje: {selectedRepo.language || 'Sin lenguaje'} • ⭐ {selectedRepo.stargazers_count ?? 0} • Forks {selectedRepo.forks ?? 0} • Watchers {selectedRepo.watchers ?? selectedRepo.watchers_count ?? 0}</p>
-          <p style={{fontSize:isMobile ? '0.74rem' : '0.8rem', marginBottom:'1rem', color:'#8ea6ff'}}>Actualizado: {selectedRepo.updated_at ? new Date(selectedRepo.updated_at).toLocaleDateString() : 'Fecha no disponible'}</p>
-          <div style={{display:'flex',gap:'0.5rem',justifyContent:isMobile ? 'space-between' : 'flex-end', flexWrap:'wrap'}}>
+          <h3 style={{ marginTop: 0, color: '#00ffd0', fontSize: isMobile ? '1.05rem' : '1.15rem' }}>{selectedRepo.name}</h3>
+          <p style={{ fontSize: isMobile ? '0.88rem' : '0.95rem' }}>{selectedRepo.description || 'Sin descripción disponible.'}</p>
+          <p style={{ fontSize: isMobile ? '0.8rem' : '0.85rem', marginBottom: '0.5rem' }}>Lenguaje: {selectedRepo.language || 'Sin lenguaje'} • ⭐ {selectedRepo.stargazers_count ?? 0} • Forks {selectedRepo.forks ?? 0} • Watchers {selectedRepo.watchers ?? selectedRepo.watchers_count ?? 0}</p>
+          <p style={{ fontSize: isMobile ? '0.74rem' : '0.8rem', marginBottom: '1rem', color: '#8ea6ff' }}>Actualizado: {selectedRepo.updated_at ? new Date(selectedRepo.updated_at).toLocaleDateString() : 'Fecha no disponible'}</p>
+          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: isMobile ? 'space-between' : 'flex-end', flexWrap: 'wrap' }}>
             <button
               type="button"
               onClick={clearSelection}
               style={{
-                padding:isMobile ? '0.45rem 0.7rem' : '0.5rem 0.8rem',
-                borderRadius:8,
-                border:'1px solid #00ffd0',
-                background:'transparent',
-                color:'#00ffd0',
-                cursor:'pointer',
+                padding: isMobile ? '0.45rem 0.7rem' : '0.5rem 0.8rem',
+                borderRadius: 8,
+                border: '1px solid #00ffd0',
+                background: 'transparent',
+                color: '#00ffd0',
+                cursor: 'pointer',
                 flex: isMobile ? '1 1 45%' : '0 0 auto',
               }}
             >Cerrar</button>
@@ -2158,13 +2164,13 @@ export default function App() {
               type="button"
               onClick={() => window.open(selectedRepo.html_url, '_blank', 'noopener,noreferrer')}
               style={{
-                padding:isMobile ? '0.45rem 0.7rem' : '0.5rem 0.8rem',
-                borderRadius:8,
-                border:'none',
-                background:'#00ffd0',
-                color:'#081018',
-                fontWeight:700,
-                cursor:'pointer',
+                padding: isMobile ? '0.45rem 0.7rem' : '0.5rem 0.8rem',
+                borderRadius: 8,
+                border: 'none',
+                background: '#00ffd0',
+                color: '#081018',
+                fontWeight: 700,
+                cursor: 'pointer',
                 flex: isMobile ? '1 1 45%' : '0 0 auto',
               }}
             >Ver en GitHub</button>
