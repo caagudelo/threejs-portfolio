@@ -252,6 +252,8 @@ export function createSolarSystem(repos) {
 
   const farNebula = createNebulaLayer({ seed: sunSeed ^ 0x9e3779b9, radius: 520, depth: -420, hue: 0.6, saturation: 0.45, spriteCount: 0, sizeRange: [90, 160] });
   const nearNebula = createNebulaLayer({ seed: sunSeed ^ 0x85ebca6b, radius: 420, depth: 360, hue: 0.05, saturation: 0.52, spriteCount: 0, sizeRange: [80, 150] });
+  farNebula.group.name = 'Nebula';
+  nearNebula.group.name = 'Nebula';
   group.add(farNebula.group);
   group.add(nearNebula.group);
   group.userData.updatables.push(farNebula.update, nearNebula.update);

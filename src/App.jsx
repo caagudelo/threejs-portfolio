@@ -8,6 +8,9 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { FilmPass } from 'three/examples/jsm/postprocessing/FilmPass.js';
+import { ARButton } from 'three/examples/jsm/webxr/ARButton.js';
+import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory.js';
+import { XRHandModelFactory } from 'three/examples/jsm/webxr/XRHandModelFactory.js';
 import { createSolarSystem } from './three/SolarSystem';
 import { fetchGithubRepos } from './three/githubApi';
 import { fetchExperiences } from './services/experiencesApi';
@@ -55,6 +58,19 @@ export default function App() {
   const spaceshipRef = useRef({ mesh: null, group: null });
   const spaceshipSelectedRef = useRef(false);
   const hoveredSpaceshipRef = useRef(false);
+
+
+
+  // AR Refs
+  const arSessionActiveRef = useRef(false);
+  const controller1Ref = useRef(null);
+  const controller2Ref = useRef(null);
+  const controllerGrip1Ref = useRef(null);
+  const controllerGrip2Ref = useRef(null);
+  const hand1Ref = useRef(null);
+  const hand2Ref = useRef(null);
+  const arGroupRef = useRef(new THREE.Group());
+  const worldGroupRef = useRef(new THREE.Group()); // Wrapper for everything to scale in AR
 
   const [repos, setRepos] = useState([]);
   const [loadingRepos, setLoadingRepos] = useState(true);
@@ -569,9 +585,180 @@ export default function App() {
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.18;
-    renderer.physicallyCorrectLights = true;
+    // renderer.physicallyCorrectLights = true; // Deprecated
+    renderer.useLegacyLights = false; // Replacement for physical lights in newer Three.js if needed
     rendererRef.current = renderer;
+    rendererRef.current = renderer;
+    // renderer.xr.enabled = true; // Disabled by default to fix desktop black screen
     container.appendChild(renderer.domElement);
+
+    const arButton = ARButton.createButton(renderer, {
+      requiredFeatures: ['hit-test', 'dom-overlay'],
+      optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'],
+      domOverlay: { root: document.body }
+    });
+
+    if ('xr' in navigator) {
+      navigator.xr.isSessionSupported('immersive-ar').then((supported) => {
+        // Enforce STRICT mobile check to avoid "Fake" AR on Desktop
+        const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+        if (supported && isMobile) {
+          // Custom style to avoid overlap with Atlas
+          arButton.style.bottom = 'auto';
+          arButton.style.left = 'auto';
+          arButton.style.top = '20px';
+          arButton.style.right = '20px';
+          document.body.appendChild(arButton);
+        } else if (supported && !isMobile) {
+          // Fallback: If supported but not detected as mobile, maybe show a warning log or just log to console
+          console.log('AR Supported but not mobile UA');
+        }
+      }).catch(err => {
+        console.error('AR Verification failed', err);
+      });
+    } else {
+      // Optional: Clean up button if created but not needed, or just don't append.
+      // Since ARButton createButton returns a DOM element but doesn't auto-append, we are safe.
+    }
+
+    const worldGroup = new THREE.Group();
+    scene.add(worldGroup);
+    worldGroupRef.current = worldGroup;
+    // AR Group to hold controllers (added to scene, not worldGroup, as they track camera/real world)
+    const arGroup = new THREE.Group();
+    scene.add(arGroup);
+    arGroupRef.current = arGroup;
+
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.68);
+    const hemisphereLight = new THREE.HemisphereLight(0xdfe6ff, 0x080b16, 0.45);
+    const pointLight = new THREE.PointLight(0xfff4d2, 1.65, 0, 2);
+    pointLight.position.set(90, 120, 180);
+    worldGroup.add(pointLight);
+
+    // AR Controllers (Initialize accessors)
+    const controller1 = renderer.xr.getController(0);
+    const controller2 = renderer.xr.getController(1);
+
+    // Event listeners can be attached safely even if not used immediately
+    controller1.addEventListener('selectstart', () => { controller1.userData.isSelecting = true; });
+    controller1.addEventListener('selectend', () => { controller1.userData.isSelecting = false; });
+    controller2.addEventListener('selectstart', () => { controller2.userData.isSelecting = true; });
+    controller2.addEventListener('selectend', () => { controller2.userData.isSelecting = false; });
+
+    // Add controllers to scene (they track camera automatically)
+    // Note: We add them to arGroup which is in scene.
+    // Ensure arGroup is valid.
+    if (arGroupRef.current) {
+      arGroupRef.current.add(controller1);
+      arGroupRef.current.add(controller2);
+    }
+
+    controller1Ref.current = controller1;
+    controller2Ref.current = controller2;
+
+    // AR Session Listeners
+    renderer.xr.addEventListener('sessionstart', () => {
+      // Switch to WebXR loop
+      cancelAnimationFrame(frameIdRef.current);
+      renderer.setAnimationLoop(animate);
+      renderer.xr.enabled = true;
+      arSessionActiveRef.current = true;
+      if (controlsRef.current) controlsRef.current.enabled = false;
+
+      // ENABLE CAMERA PASSTHROUGH
+      // Make background transparent so camera shows through
+      renderer.setClearAlpha(0);
+      document.body.style.background = 'transparent'; // CRITICAL: Reveal camera behind body
+
+      // Initialize Controller/Hand Models (Lazy Load)
+      if (!controllerGrip1Ref.current) {
+        try {
+          const controllerModelFactory = new XRControllerModelFactory();
+          const handModelFactory = new XRHandModelFactory();
+
+          // Grip 1
+          const controllerGrip1 = renderer.xr.getControllerGrip(0);
+          controllerGrip1.add(controllerModelFactory.createControllerModel(controllerGrip1));
+          arGroupRef.current.add(controllerGrip1);
+          controllerGrip1Ref.current = controllerGrip1;
+
+          // Grip 2
+          const controllerGrip2 = renderer.xr.getControllerGrip(1);
+          controllerGrip2.add(controllerModelFactory.createControllerModel(controllerGrip2));
+          arGroupRef.current.add(controllerGrip2);
+          controllerGrip2Ref.current = controllerGrip2;
+
+          // Hand 1
+          const hand1 = renderer.xr.getHand(0);
+          hand1.add(handModelFactory.createHandModel(hand1));
+          arGroupRef.current.add(hand1);
+          hand1Ref.current = hand1;
+
+          // Hand 2
+          const hand2 = renderer.xr.getHand(1);
+          hand2.add(handModelFactory.createHandModel(hand2));
+          arGroupRef.current.add(hand2);
+          hand2Ref.current = hand2;
+        } catch (e) {
+          console.warn('AR Models failed to initialize', e);
+        }
+      }
+
+
+
+      // AR LIGHTING SETUP: Realistic Contrast
+
+      // 1. Soft Ambient Light (Fill) - Lower intensity for shadows
+      const arAmbientLight = new THREE.AmbientLight(0xffffff, 0.6);
+      arAmbientLight.name = 'ar-ambient-light';
+      scene.add(arAmbientLight);
+
+      // 2. Adjust Sun Appearance for AR
+      if (solarGroupRef.current) {
+        // Boost internal sun light
+        solarGroupRef.current.traverse((child) => {
+          if (child.isPointLight) { // The internal sun light
+            child.userData.originalIntensity = child.intensity;
+            child.intensity = 4.5; // Stronger for AR
+            child.userData.originalDistance = child.distance;
+            child.distance = 200; // Reach further
+          }
+          if (child.userData && child.userData.type === 'sun-core' && child.material) {
+            child.userData.originalEmissive = child.material.emissiveIntensity;
+            child.material.emissiveIntensity = 0.5; // Reduce to avoid white-out tone mapping
+            child.userData.originalColor = child.material.color.getHex();
+            child.material.color.setHex(0xffaa00); // More vivid orange
+          }
+        });
+      }
+
+      // Resize and position world for AR (Tabletop scale - larger for interaction)
+      // SCALE: 0.002 (~72cm diameter, large tabletop)
+      worldGroup.scale.set(0.002, 0.002, 0.002);
+      worldGroup.position.set(0, -0.2, -0.5);
+
+      // Hide distant backgrounds (Stars, Distant Galaxies)
+      if (starFieldRef.current) starFieldRef.current.visible = false;
+      if (galaxyGroupRef.current) galaxyGroupRef.current.visible = false;
+      if (meteorGroupRef.current) meteorGroupRef.current.visible = false;
+
+      // dark-sphere: Darken the background locally to simulate space
+      const darkSphereGeometry = new THREE.SphereGeometry(450, 32, 32);
+      const darkSphereMaterial = new THREE.MeshBasicMaterial({
+        color: 0x000000,
+        side: THREE.BackSide,
+        transparent: true,
+        opacity: 0.85
+      });
+      const darkSphere = new THREE.Mesh(darkSphereGeometry, darkSphereMaterial);
+      darkSphere.name = 'ar-dark-sphere';
+      worldGroup.add(darkSphere);
+    });
+
+    renderer.xr.addEventListener('sessionend', () => {
+      window.location.reload();
+    });
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -624,13 +811,9 @@ export default function App() {
     composerRef.current = composer;
     bloomPassRef.current = bloomPass;
 
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.68);
-    const hemisphereLight = new THREE.HemisphereLight(0xdfe6ff, 0x080b16, 0.45);
-    const pointLight = new THREE.PointLight(0xfff4d2, 1.65, 0, 2);
-    pointLight.position.set(90, 120, 180);
-    scene.add(ambientLight);
-    scene.add(hemisphereLight);
-    scene.add(pointLight);
+    worldGroup.add(ambientLight);
+    worldGroup.add(hemisphereLight);
+    worldGroup.add(pointLight);
 
     const particles = (() => {
       if (typeof window === 'undefined') {
@@ -681,11 +864,11 @@ export default function App() {
       opacity: 0.46,
     });
     const starField = new THREE.Points(starGeometry, starMaterial);
-    scene.add(starField);
+    worldGroup.add(starField);
     starFieldRef.current = starField;
 
     const galaxyGroup = new THREE.Group();
-    scene.add(galaxyGroup);
+    worldGroup.add(galaxyGroup);
     galaxyGroupRef.current = galaxyGroup;
 
     const createGalaxyTexture = (stops) => {
@@ -751,7 +934,7 @@ export default function App() {
     galaxiesRef.current = galaxies;
 
     const meteorGroup = new THREE.Group();
-    scene.add(meteorGroup);
+    worldGroup.add(meteorGroup);
     meteorGroupRef.current = meteorGroup;
 
     const meteorGeometry = new THREE.SphereGeometry(0.55, 14, 12);
@@ -1111,7 +1294,8 @@ export default function App() {
           setSelectedRepo(null);
           hoveredPlanetRef.current = null;
           setHoveredRepo(null);
-          resetCameraFocus();
+          // Don't reset camera automatically when clicking background, annoying for mobile users
+          // resetCameraFocus();
         }
       }
     };
@@ -1138,6 +1322,13 @@ export default function App() {
         const dy = event.clientY - pointerStateRef.current.startY;
         if (Math.sqrt(dx * dx + dy * dy) > 6) {
           pointerStateRef.current.isDragging = true;
+
+          // AR Touch Rotation (Mobile)
+          if (arSessionActiveRef.current && worldGroupRef.current) {
+            const sensitivity = 0.005;
+            worldGroupRef.current.rotation.y += dx * sensitivity;
+          }
+
           if (hoveredPlanetRef.current && hoveredPlanetRef.current !== selectedPlanetRef.current) {
             resetPlanetAppearance(hoveredPlanetRef.current);
             hoveredPlanetRef.current = null;
@@ -1243,7 +1434,10 @@ export default function App() {
     renderer.domElement.addEventListener('pointercancel', handlePointerLeave);
 
     const animate = () => {
-      frameIdRef.current = requestAnimationFrame(animate);
+      // DEBUG LOOP
+      // if (Math.random() < 0.01) console.log('Loop running', arSessionActiveRef.current);
+
+      // The animation loop is now managed by renderer.setAnimationLoop(animate);
       const elapsed = clockRef.current.getElapsedTime();
       if (starFieldRef.current) {
         starFieldRef.current.rotation.y += 0.0004;
@@ -1356,16 +1550,71 @@ export default function App() {
       if (controlsRef.current) {
         controlsRef.current.update();
       }
-      if (composerRef.current && sceneRef.current && cameraRef.current) {
+
+      if (arSessionActiveRef.current && rendererRef.current && cameraRef.current && sceneRef.current) {
+        // BYPASS EFFECT COMPOSER IN AR TO ENSURE TRANSPARENCY
+        rendererRef.current.render(sceneRef.current, cameraRef.current);
+      } else if (composerRef.current && sceneRef.current && cameraRef.current) {
         composerRef.current.render();
       } else if (rendererRef.current && cameraRef.current && sceneRef.current) {
         rendererRef.current.render(sceneRef.current, cameraRef.current);
       }
+
+      // AR Interaction Logic (Controllers)
+      if (arSessionActiveRef.current && worldGroupRef.current) {
+        const c1 = controller1Ref.current;
+        const c2 = controller2Ref.current;
+
+        if (c1 && c2) {
+          // Pinch to scale (2 controllers selecting)
+          if (c1.userData.isSelecting && c2.userData.isSelecting) {
+            const dist = c1.position.distanceTo(c2.position);
+            const prevDist = c1.userData.prevDist || dist;
+
+            if (prevDist > 0) {
+              const scaleFactor = dist / prevDist;
+              worldGroupRef.current.scale.multiplyScalar(scaleFactor);
+              // Clamp scale
+              worldGroupRef.current.scale.x = THREE.MathUtils.clamp(worldGroupRef.current.scale.x, 0.01, 2);
+              worldGroupRef.current.scale.y = THREE.MathUtils.clamp(worldGroupRef.current.scale.y, 0.01, 2);
+              worldGroupRef.current.scale.z = THREE.MathUtils.clamp(worldGroupRef.current.scale.z, 0.01, 2);
+            }
+            c1.userData.prevDist = dist;
+          } else {
+            c1.userData.prevDist = null;
+          }
+
+          // Drag to move (1 controller selecting)
+          if (c1.userData.isSelecting && !c2.userData.isSelecting) {
+            const currPos = c1.position;
+            if (c1.userData.prevPos) {
+              const delta = new THREE.Vector3().subVectors(currPos, c1.userData.prevPos);
+              worldGroupRef.current.position.add(delta.multiplyScalar(3));
+            }
+            c1.userData.prevPos = currPos.clone();
+          } else {
+            c1.userData.prevPos = null;
+          }
+
+          if (c2.userData.isSelecting && !c1.userData.isSelecting) {
+            const currPos = c2.position;
+            if (c2.userData.prevPos) {
+              const delta = new THREE.Vector3().subVectors(currPos, c2.userData.prevPos);
+              worldGroupRef.current.position.add(delta.multiplyScalar(3));
+            }
+            c2.userData.prevPos = currPos.clone();
+          } else {
+            c2.userData.prevPos = null;
+          }
+        }
+      }
     };
 
-    animate();
+    renderer.setAnimationLoop(animate);
+    // animate(); // Removed in favor of setAnimationLoop
 
     return () => {
+      renderer.setAnimationLoop(null);
       cancelAnimationFrame(frameIdRef.current);
       window.removeEventListener('resize', handleResize);
       renderer.domElement.removeEventListener('pointermove', handlePointerMove);
@@ -1390,7 +1639,8 @@ export default function App() {
           starFieldRef.current.material.map.dispose();
         }
         starFieldRef.current.material.dispose();
-        scene.remove(starFieldRef.current);
+        starFieldRef.current.material.dispose();
+        if (worldGroupRef.current) worldGroupRef.current.remove(starFieldRef.current);
         starFieldRef.current = null;
       }
       if (galaxiesRef.current.length > 0) {
@@ -1401,7 +1651,7 @@ export default function App() {
         galaxiesRef.current = [];
       }
       if (galaxyGroupRef.current) {
-        scene.remove(galaxyGroupRef.current);
+        if (worldGroupRef.current) worldGroupRef.current.remove(galaxyGroupRef.current);
         galaxyGroupRef.current = null;
       }
       if (meteorsRef.current.length > 0) {
@@ -1413,7 +1663,7 @@ export default function App() {
         meteorsRef.current = [];
       }
       if (meteorGroupRef.current) {
-        scene.remove(meteorGroupRef.current);
+        if (worldGroupRef.current) worldGroupRef.current.remove(meteorGroupRef.current);
         meteorGroupRef.current = null;
       }
       meteorGeometry.dispose();
@@ -1457,7 +1707,8 @@ export default function App() {
           };
           return getTimestamp(b) - getTimestamp(a);
         });
-        setRepos(sorted);
+        // Limit to only 8 repositories as requested by user to keep scene small
+        setRepos(sorted.slice(0, 8));
         setLoadingRepos(false);
       })
       .catch(() => {
@@ -1530,7 +1781,8 @@ export default function App() {
       return;
     }
     if (solarGroupRef.current) {
-      disposeSolarSystem(sceneRef.current, solarGroupRef.current);
+      // disposeSolarSystem(sceneRef.current, solarGroupRef.current); // Use worldGroup
+      disposeSolarSystem(worldGroupRef.current || sceneRef.current, solarGroupRef.current);
       solarGroupRef.current = null;
       planetMeshesRef.current = [];
       hoveredPlanetRef.current = null;
@@ -1571,14 +1823,21 @@ export default function App() {
     spaceshipSelectedRef.current = false;
     setSpaceshipHovered(false);
     setSpaceshipInfoVisible(false);
-    sceneRef.current.add(group);
+    setSpaceshipInfoVisible(false);
+
+    // Add to worldGroup instead of scene
+    if (worldGroupRef.current) {
+      worldGroupRef.current.add(group);
+    } else {
+      sceneRef.current.add(group); // Fallback
+    }
   }, [repos]);
 
   const containerStyle = {
     width: '100vw',
     height: '100vh',
     overflow: 'hidden',
-    background: '#050510',
+    background: 'transparent', // Changed from #050510 to allow AR camera
     position: 'relative',
   };
 
