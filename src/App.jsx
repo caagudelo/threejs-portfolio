@@ -9,6 +9,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { FilmPass } from 'three/examples/jsm/postprocessing/FilmPass.js';
 import { ARButton } from 'three/examples/jsm/webxr/ARButton.js';
+import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory.js';
 import { XRHandModelFactory } from 'three/examples/jsm/webxr/XRHandModelFactory.js';
 import { createSolarSystem } from './three/SolarSystem';
@@ -61,8 +62,10 @@ export default function App() {
 
 
 
-  // AR Refs
+  // WebXR Refs
+  const xrSessionActiveRef = useRef(false);
   const arSessionActiveRef = useRef(false);
+  const vrSessionActiveRef = useRef(false);
   const controller1Ref = useRef(null);
   const controller2Ref = useRef(null);
   const controllerGrip1Ref = useRef(null);
@@ -592,6 +595,7 @@ export default function App() {
     // renderer.xr.enabled = true; // Disabled by default to fix desktop black screen
     container.appendChild(renderer.domElement);
 
+    const vrButton = VRButton.createButton(renderer);
     const arButton = ARButton.createButton(renderer, {
       requiredFeatures: ['hit-test', 'dom-overlay'],
       optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'],
@@ -599,27 +603,32 @@ export default function App() {
     });
 
     if ('xr' in navigator) {
-      navigator.xr.isSessionSupported('immersive-ar').then((supported) => {
-        // Enforce STRICT mobile check to avoid "Fake" AR on Desktop
-        const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      const checkVR = navigator.xr.isSessionSupported('immersive-vr');
+      const checkAR = navigator.xr.isSessionSupported('immersive-ar');
 
-        if (supported && isMobile) {
-          // Custom style to avoid overlap with Atlas
+      Promise.all([checkVR, checkAR]).then(([vrSupported, arSupported]) => {
+        const isXRDevice = /Android|iPhone|iPad|iPod|Oculus|Quest/i.test(navigator.userAgent);
+
+        if (vrSupported) {
+          vrButton.style.bottom = 'auto';
+          vrButton.style.left = 'auto';
+          vrButton.style.top = '20px';
+          vrButton.style.right = '20px';
+          vrButton.style.zIndex = '9999';
+          document.body.appendChild(vrButton);
+        }
+
+        if (arSupported && isXRDevice) {
           arButton.style.bottom = 'auto';
           arButton.style.left = 'auto';
           arButton.style.top = '20px';
-          arButton.style.right = '20px';
+          arButton.style.right = vrSupported ? '180px' : '20px';
+          arButton.style.zIndex = '9999';
           document.body.appendChild(arButton);
-        } else if (supported && !isMobile) {
-          // Fallback: If supported but not detected as mobile, maybe show a warning log or just log to console
-          console.log('AR Supported but not mobile UA');
         }
       }).catch(err => {
-        console.error('AR Verification failed', err);
+        console.error('WebXR support check failed', err);
       });
-    } else {
-      // Optional: Clean up button if created but not needed, or just don't append.
-      // Since ARButton createButton returns a DOM element but doesn't auto-append, we are safe.
     }
 
     const worldGroup = new THREE.Group();
@@ -657,21 +666,76 @@ export default function App() {
     controller1Ref.current = controller1;
     controller2Ref.current = controller2;
 
-    // AR Session Listeners
+    // WebXR Session Listeners
     renderer.xr.addEventListener('sessionstart', () => {
+      const session = renderer.xr.getSession();
+      const isAR = session.environmentBlendMode === 'additive' || session.environmentBlendMode === 'alpha-blend';
+
       // Switch to WebXR loop
       cancelAnimationFrame(frameIdRef.current);
       renderer.setAnimationLoop(animate);
       renderer.xr.enabled = true;
-      arSessionActiveRef.current = true;
+      xrSessionActiveRef.current = true;
+
       if (controlsRef.current) controlsRef.current.enabled = false;
 
-      // ENABLE CAMERA PASSTHROUGH
-      // Make background transparent so camera shows through
-      renderer.setClearAlpha(0);
-      document.body.style.background = 'transparent'; // CRITICAL: Reveal camera behind body
+      if (isAR) {
+        arSessionActiveRef.current = true;
+        vrSessionActiveRef.current = false;
 
-      // Initialize Controller/Hand Models (Lazy Load)
+        // ENABLE CAMERA PASSTHROUGH
+        renderer.setClearAlpha(0);
+        document.body.style.background = 'transparent';
+
+        // AR Tabletop scale
+        worldGroup.scale.set(0.002, 0.002, 0.002);
+        worldGroup.position.set(0, -0.2, -0.5);
+
+        // Hide backgrounds in AR
+        if (starFieldRef.current) starFieldRef.current.visible = false;
+        if (galaxyGroupRef.current) galaxyGroupRef.current.visible = false;
+        if (meteorGroupRef.current) meteorGroupRef.current.visible = false;
+
+        // Darken background for AR contrast
+        const darkSphere = scene.getObjectByName('ar-dark-sphere');
+        if (!darkSphere) {
+          const darkSphereGeometry = new THREE.SphereGeometry(450, 32, 32);
+          const darkSphereMaterial = new THREE.MeshBasicMaterial({
+            color: 0x000000,
+            side: THREE.BackSide,
+            transparent: true,
+            opacity: 0.85
+          });
+          const ds = new THREE.Mesh(darkSphereGeometry, darkSphereMaterial);
+          ds.name = 'ar-dark-sphere';
+          worldGroup.add(ds);
+        } else {
+          darkSphere.visible = true;
+        }
+      } else {
+        // VR MODE
+        arSessionActiveRef.current = false;
+        vrSessionActiveRef.current = true;
+
+        // Keep backgrounds in VR
+        if (starFieldRef.current) starFieldRef.current.visible = true;
+        if (galaxyGroupRef.current) galaxyGroupRef.current.visible = true;
+        if (meteorGroupRef.current) meteorGroupRef.current.visible = true;
+
+        // Hide AR dark sphere if it exists
+        const darkSphere = scene.getObjectByName('ar-dark-sphere');
+        if (darkSphere) darkSphere.visible = false;
+
+        // Reset world scale for immersive feeling
+        worldGroup.scale.set(1, 1, 1);
+        worldGroup.position.set(0, 0, 0);
+
+        // Adjust camera for VR start if needed (usually handled by headset)
+        renderer.setClearAlpha(1);
+        renderer.setClearColor(0x050510, 1);
+      }
+
+      // Common: Initialize Controller/Hand Models (Lazy Load)
       if (!controllerGrip1Ref.current) {
         try {
           const controllerModelFactory = new XRControllerModelFactory();
@@ -701,59 +765,34 @@ export default function App() {
           arGroupRef.current.add(hand2);
           hand2Ref.current = hand2;
         } catch (e) {
-          console.warn('AR Models failed to initialize', e);
+          console.warn('XR Models failed to initialize', e);
         }
       }
 
+      // XR LIGHTING SETUP
+      const arAmbientLight = scene.getObjectByName('ar-ambient-light');
+      if (!arAmbientLight) {
+        const light = new THREE.AmbientLight(0xffffff, 0.6);
+        light.name = 'ar-ambient-light';
+        scene.add(light);
+      }
 
-
-      // AR LIGHTING SETUP: Realistic Contrast
-
-      // 1. Soft Ambient Light (Fill) - Lower intensity for shadows
-      const arAmbientLight = new THREE.AmbientLight(0xffffff, 0.6);
-      arAmbientLight.name = 'ar-ambient-light';
-      scene.add(arAmbientLight);
-
-      // 2. Adjust Sun Appearance for AR
       if (solarGroupRef.current) {
-        // Boost internal sun light
         solarGroupRef.current.traverse((child) => {
-          if (child.isPointLight) { // The internal sun light
+          if (child.isPointLight) {
             child.userData.originalIntensity = child.intensity;
-            child.intensity = 4.5; // Stronger for AR
+            child.intensity = isAR ? 4.5 : 2.5;
             child.userData.originalDistance = child.distance;
-            child.distance = 200; // Reach further
+            child.distance = isAR ? 200 : 420;
           }
           if (child.userData && child.userData.type === 'sun-core' && child.material) {
             child.userData.originalEmissive = child.material.emissiveIntensity;
-            child.material.emissiveIntensity = 0.5; // Reduce to avoid white-out tone mapping
+            child.material.emissiveIntensity = isAR ? 0.5 : 1.15;
             child.userData.originalColor = child.material.color.getHex();
-            child.material.color.setHex(0xffaa00); // More vivid orange
+            if (isAR) child.material.color.setHex(0xffaa00);
           }
         });
       }
-
-      // Resize and position world for AR (Tabletop scale - larger for interaction)
-      // SCALE: 0.002 (~72cm diameter, large tabletop)
-      worldGroup.scale.set(0.002, 0.002, 0.002);
-      worldGroup.position.set(0, -0.2, -0.5);
-
-      // Hide distant backgrounds (Stars, Distant Galaxies)
-      if (starFieldRef.current) starFieldRef.current.visible = false;
-      if (galaxyGroupRef.current) galaxyGroupRef.current.visible = false;
-      if (meteorGroupRef.current) meteorGroupRef.current.visible = false;
-
-      // dark-sphere: Darken the background locally to simulate space
-      const darkSphereGeometry = new THREE.SphereGeometry(450, 32, 32);
-      const darkSphereMaterial = new THREE.MeshBasicMaterial({
-        color: 0x000000,
-        side: THREE.BackSide,
-        transparent: true,
-        opacity: 0.85
-      });
-      const darkSphere = new THREE.Mesh(darkSphereGeometry, darkSphereMaterial);
-      darkSphere.name = 'ar-dark-sphere';
-      worldGroup.add(darkSphere);
     });
 
     renderer.xr.addEventListener('sessionend', () => {
@@ -1323,8 +1362,8 @@ export default function App() {
         if (Math.sqrt(dx * dx + dy * dy) > 6) {
           pointerStateRef.current.isDragging = true;
 
-          // AR Touch Rotation (Mobile)
-          if (arSessionActiveRef.current && worldGroupRef.current) {
+          // XR Touch Rotation (Mobile/WebXR Overlay)
+          if (xrSessionActiveRef.current && worldGroupRef.current) {
             const sensitivity = 0.005;
             worldGroupRef.current.rotation.y += dx * sensitivity;
           }
@@ -1551,8 +1590,8 @@ export default function App() {
         controlsRef.current.update();
       }
 
-      if (arSessionActiveRef.current && rendererRef.current && cameraRef.current && sceneRef.current) {
-        // BYPASS EFFECT COMPOSER IN AR TO ENSURE TRANSPARENCY
+      if (xrSessionActiveRef.current && rendererRef.current && cameraRef.current && sceneRef.current) {
+        // BYPASS EFFECT COMPOSER IN XR TO ENSURE COMPATIBILITY AND TRANSPARENCY
         rendererRef.current.render(sceneRef.current, cameraRef.current);
       } else if (composerRef.current && sceneRef.current && cameraRef.current) {
         composerRef.current.render();
@@ -1560,8 +1599,8 @@ export default function App() {
         rendererRef.current.render(sceneRef.current, cameraRef.current);
       }
 
-      // AR Interaction Logic (Controllers)
-      if (arSessionActiveRef.current && worldGroupRef.current) {
+      // XR Interaction Logic (Controllers)
+      if (xrSessionActiveRef.current && worldGroupRef.current) {
         const c1 = controller1Ref.current;
         const c2 = controller2Ref.current;
 
