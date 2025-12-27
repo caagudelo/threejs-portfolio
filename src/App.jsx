@@ -58,7 +58,10 @@ export default function App() {
   const hoveredSunRef = useRef(false);
   const spaceshipRef = useRef({ mesh: null, group: null });
   const spaceshipSelectedRef = useRef(false);
+  const infoPanelXRRef = useRef(null);
   const hoveredSpaceshipRef = useRef(false);
+  const profileDataRef = useRef(null);
+  const experiencesDataRef = useRef([]);
 
 
 
@@ -97,6 +100,15 @@ export default function App() {
   const [viewportWidth, setViewportWidth] = useState(() => (typeof window !== 'undefined' ? window.innerWidth : 1280));
   const [sunPanelInteractive, setSunPanelInteractive] = useState(false);
   const [spaceshipPanelInteractive, setSpaceshipPanelInteractive] = useState(false);
+
+  // Sync refs with state for use in animation loop/XR
+  useEffect(() => {
+    profileDataRef.current = profileData;
+  }, [profileData]);
+
+  useEffect(() => {
+    experiencesDataRef.current = experiencesData;
+  }, [experiencesData]);
 
   const layoutFlags = useMemo(() => ({
     isTablet: viewportWidth <= 1024,
@@ -460,6 +472,145 @@ export default function App() {
     setSpaceshipHovered(false);
     setSpaceshipInfoVisible(false);
     resetCameraFocus();
+
+    // Remove XR Info Panel
+    if (infoPanelXRRef.current) {
+      if (infoPanelXRRef.current.parent) infoPanelXRRef.current.parent.remove(infoPanelXRRef.current);
+      if (infoPanelXRRef.current.material.map) infoPanelXRRef.current.material.map.dispose();
+      infoPanelXRRef.current.material.dispose();
+      infoPanelXRRef.current.geometry.dispose();
+      infoPanelXRRef.current = null;
+    }
+  };
+
+  const updateHolographicPanel = (data, targetPosition) => {
+    // 1. Remove old panel
+    if (infoPanelXRRef.current) {
+      if (infoPanelXRRef.current.parent) infoPanelXRRef.current.parent.remove(infoPanelXRRef.current);
+      if (infoPanelXRRef.current.material.map) infoPanelXRRef.current.material.map.dispose();
+      infoPanelXRRef.current.material.dispose();
+      infoPanelXRRef.current.geometry.dispose();
+      infoPanelXRRef.current = null;
+    }
+
+    if (!data || !worldGroupRef.current) return;
+
+    // 2. Create Canvas for the "Hologram"
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = 512;
+    canvas.height = 320;
+
+    // GRADIENT BACKGROUND
+    const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    grad.addColorStop(0, 'rgba(0, 15, 30, 0.96)');
+    grad.addColorStop(1, 'rgba(0, 45, 90, 0.88)');
+
+    ctx.fillStyle = grad;
+    const r = 30;
+    const x = 5, y = 5, w = canvas.width - 10, h = canvas.height - 10;
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+    ctx.fill();
+
+    // Border Cyan Glow
+    ctx.strokeStyle = 'rgba(0, 242, 255, 0.75)';
+    ctx.lineWidth = 8;
+    ctx.stroke();
+
+    // Scanline effect (subtle)
+    ctx.fillStyle = 'rgba(0, 242, 255, 0.04)';
+    for (let i = 0; i < canvas.height; i += 6) {
+      ctx.fillRect(0, i, canvas.width, 2);
+    }
+
+    // TEXT RENDERING
+    ctx.shadowColor = 'rgba(0, 242, 255, 0.6)';
+    ctx.shadowBlur = 12;
+
+    // Title
+    ctx.fillStyle = '#00f2ff';
+    ctx.font = 'bold 38px Arial';
+    const title = (data.name || data.full_name || 'System Object').toUpperCase();
+    ctx.fillText(title, 35, 65);
+
+    // Language & Stats
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '26px Arial';
+    let statsY = 115;
+    if (data.language) {
+      ctx.fillText(`Language: ${data.language}`, 35, statsY);
+      statsY += 40;
+    }
+    if (data.stargazers_count !== undefined) {
+      ctx.fillText(`\u2B50 Stars: ${data.stargazers_count}`, 35, statsY);
+      statsY += 40;
+    }
+
+    // Separator line
+    ctx.strokeStyle = 'rgba(0, 242, 255, 0.3)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(35, statsY);
+    ctx.lineTo(canvas.width - 35, statsY);
+    ctx.stroke();
+    statsY += 40;
+
+    // Description
+    ctx.font = '22px Arial';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+    const desc = data.description || 'Professional portfolio component. Select to view details and repository links.';
+    const words = desc.split(' ');
+    let line = '';
+    let currY = statsY;
+    for (let n = 0; n < words.length; n++) {
+      let testLine = line + words[n] + ' ';
+      if (ctx.measureText(testLine).width > 440 && n > 0) {
+        ctx.fillText(line, 35, currY);
+        line = words[n] + ' ';
+        currY += 32;
+      } else {
+        line = testLine;
+      }
+    }
+    ctx.fillText(line, 35, currY);
+
+    // 3. Create Sprite (Always faces camera)
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const spriteMaterial = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: false
+    });
+    const sprite = new THREE.Sprite(spriteMaterial);
+    sprite.name = 'XRInfoPanel'; // Tag for auto-scaling
+
+    // Set a physical size (approx 45cm wide in VR meters)
+    // We divide by world scale to maintain this size regardless of zoom
+    const targetWorldWidth = 0.45;
+    const currentWorldScale = worldGroupRef.current.scale.x;
+    const localScale = targetWorldWidth / currentWorldScale;
+
+    sprite.scale.set(localScale, localScale / 1.6, 1);
+
+    // Position it above the target
+    sprite.position.copy(targetPosition);
+    // Offset 25cm above (constant world distance)
+    sprite.position.y += 0.25 / currentWorldScale;
+
+    worldGroupRef.current.add(sprite);
+    infoPanelXRRef.current = sprite;
   };
 
   const closeSunPanel = () => {
@@ -649,15 +800,32 @@ export default function App() {
     const controller1 = renderer.xr.getController(0);
     const controller2 = renderer.xr.getController(1);
 
-    // Event listeners can be attached safely even if not used immediately
-    controller1.addEventListener('selectstart', () => { controller1.userData.isSelecting = true; });
+    // Visual Ray Line for controllers
+    const geometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -5)]);
+    const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({
+      color: 0x00f2ff,
+      transparent: true,
+      opacity: 0.5
+    }));
+    line.name = 'line';
+    line.scale.z = 1;
+
+    controller1.add(line.clone());
+    controller2.add(line.clone());
+
+    // Event listeners for XR
+    controller1.addEventListener('selectstart', () => {
+      controller1.userData.isSelecting = true;
+      castRayXR(controller1, 'click');
+    });
     controller1.addEventListener('selectend', () => { controller1.userData.isSelecting = false; });
-    controller2.addEventListener('selectstart', () => { controller2.userData.isSelecting = true; });
+    controller2.addEventListener('selectstart', () => {
+      controller2.userData.isSelecting = true;
+      castRayXR(controller2, 'click');
+    });
     controller2.addEventListener('selectend', () => { controller2.userData.isSelecting = false; });
 
-    // Add controllers to scene (they track camera automatically)
-    // Note: We add them to arGroup which is in scene.
-    // Ensure arGroup is valid.
+    // Add controllers to scene
     if (arGroupRef.current) {
       arGroupRef.current.add(controller1);
       arGroupRef.current.add(controller2);
@@ -717,20 +885,25 @@ export default function App() {
         arSessionActiveRef.current = false;
         vrSessionActiveRef.current = true;
 
-        // Keep backgrounds in VR
-        if (starFieldRef.current) starFieldRef.current.visible = true;
-        if (galaxyGroupRef.current) galaxyGroupRef.current.visible = true;
-        if (meteorGroupRef.current) meteorGroupRef.current.visible = true;
+        // Hide backgrounds in VR to focus only on the solar system
+        if (starFieldRef.current) starFieldRef.current.visible = false;
+        if (galaxyGroupRef.current) galaxyGroupRef.current.visible = false;
+        if (meteorGroupRef.current) meteorGroupRef.current.visible = false;
+
+        // Hide nebulas (which can cause the "black squares" artifact in VR)
+        scene.traverse((child) => {
+          if (child.name === 'Nebula') child.visible = false;
+        });
 
         // Hide AR dark sphere if it exists
         const darkSphere = scene.getObjectByName('ar-dark-sphere');
         if (darkSphere) darkSphere.visible = false;
 
-        // Reset world scale for immersive feeling
-        worldGroup.scale.set(1, 1, 1);
-        worldGroup.position.set(0, 0, 0);
+        // Initial "God" view: Move world down and forward, scale it down for perspective
+        worldGroup.scale.set(0.015, 0.015, 0.015);
+        worldGroup.position.set(0, -0.8, -1.5);
 
-        // Adjust camera for VR start if needed (usually handled by headset)
+        // Adjust camera for VR start
         renderer.setClearAlpha(1);
         renderer.setClearColor(0x050510, 1);
       }
@@ -1079,6 +1252,122 @@ export default function App() {
     };
 
     window.addEventListener('resize', handleResize);
+
+    const castRayXR = (controller, type) => {
+      const scene = sceneRef.current;
+      if (!scene || !controller || interactableMeshesRef.current.length === 0) return;
+
+      const tempMatrix = new THREE.Matrix4();
+      tempMatrix.identity().extractRotation(controller.matrixWorld);
+
+      const raycaster = raycasterRef.current;
+      raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+      raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+
+      const intersects = raycaster.intersectObjects(interactableMeshesRef.current, false);
+      const spaceshipHit = intersects.find(i => i.object.userData?.type === 'spaceship');
+      const hit = spaceshipHit || intersects.find(i => i.object.userData?.type === 'sun' || i.object.userData?.repo);
+
+      const rendererInstance = rendererRef.current;
+
+      if (type === 'hover') {
+        if (hit) {
+          const target = hit.object;
+          const data = target.userData || {};
+          if (data.type === 'sun') {
+            if (!sunSelectedRef.current) emphasizeSun('hover');
+            hoveredSunRef.current = true;
+            setSunHovered(true);
+          } else if (data.type === 'spaceship') {
+            if (!spaceshipSelectedRef.current) emphasizeSpaceship('hover');
+            hoveredSpaceshipRef.current = true;
+            setSpaceshipHovered(true);
+          } else if (data.repo) {
+            if (target !== selectedPlanetRef.current) emphasizePlanet(target, { scale: 1.2, glowMultiplier: 2.1 });
+            hoveredPlanetRef.current = target;
+            setHoveredRepo(target.userData.repo);
+          }
+        } else {
+          // Reset hovers if no hit
+          if (hoveredPlanetRef.current && hoveredPlanetRef.current !== selectedPlanetRef.current) {
+            resetPlanetAppearance(hoveredPlanetRef.current);
+            hoveredPlanetRef.current = null;
+            setHoveredRepo(null);
+          }
+          if (hoveredSunRef.current && !sunSelectedRef.current) {
+            resetSunAppearance();
+            hoveredSunRef.current = false;
+            setSunHovered(false);
+          }
+          if (hoveredSpaceshipRef.current && !spaceshipSelectedRef.current) {
+            resetSpaceshipAppearance();
+            hoveredSpaceshipRef.current = false;
+            setSpaceshipHovered(false);
+          }
+        }
+      } else if (type === 'click' && hit) {
+        const target = hit.object;
+        const data = target.userData || {};
+
+        // Selection logic
+        if (data.type === 'sun') {
+          if (sunSelectedRef.current) {
+            closeSunPanel();
+          } else {
+            clearSelection();
+            sunSelectedRef.current = true;
+            emphasizeSun('selected');
+            setSunInfoVisible(true);
+            setSunHovered(true);
+
+            // XR Info - Sync with Desktop (Professional Profile)
+            const sunData = {
+              name: profileDataRef.current?.name || "Camilo Agudelo",
+              language: profileDataRef.current?.location || "Software Developer",
+              stargazers_count: profileDataRef.current?.public_repos,
+              description: profileDataRef.current?.bio || "El corazón del portfolio. Representa las habilidades principales y la arquitectura base."
+            };
+            updateHolographicPanel(sunData, target.position);
+            focusOnSun();
+          }
+        } else if (data.type === 'spaceship') {
+          if (spaceshipSelectedRef.current) {
+            closeSpaceshipPanel();
+          } else {
+            clearSelection();
+            spaceshipSelectedRef.current = true;
+            emphasizeSpaceship('selected');
+            setSpaceshipInfoVisible(true);
+            setSpaceshipHovered(true);
+
+            // XR Info - Sync with Desktop (Contact Log)
+            const shipData = {
+              name: "Bitácora de Contacto",
+              language: "Interacción UI",
+              description: "Explora mi trayectoria y conecta conmigo. Soy un desarrollador enfocado en convertir ideas en experiencias fluidas."
+            };
+            updateHolographicPanel(shipData, target.position);
+            focusOnSpaceship();
+          }
+        } else if (data.repo) {
+          const planet = target;
+          if (selectedPlanetRef.current === planet) {
+            clearSelection();
+          } else {
+            clearSelection();
+            selectedPlanetRef.current = planet;
+            emphasizePlanet(planet, { scale: 1.34, glowMultiplier: 2.8 });
+            setSelectedRepo(planet.userData.repo);
+            hoveredPlanetRef.current = planet;
+            setHoveredRepo(planet.userData.repo);
+
+            // XR Info
+            updateHolographicPanel(planet.userData.repo, planet.position);
+            focusOnPlanet(planet);
+          }
+        }
+      }
+    };
 
     const castRay = (type) => {
       const camera = cameraRef.current;
@@ -1540,7 +1829,7 @@ export default function App() {
         }
       }
 
-      if (cameraFocusRef.current && cameraRef.current && controlsRef.current) {
+      if (!xrSessionActiveRef.current && cameraFocusRef.current && cameraRef.current && controlsRef.current) {
         const focus = cameraFocusRef.current;
         const progress = THREE.MathUtils.clamp((elapsed - focus.startTime) / focus.duration, 0, 1);
         const eased = progress * progress * (3 - 2 * progress);
@@ -1561,7 +1850,7 @@ export default function App() {
         }
       }
 
-      if (!cameraFocusRef.current && cameraFollowRef.current && cameraRef.current && controlsRef.current) {
+      if (!xrSessionActiveRef.current && !cameraFocusRef.current && cameraFollowRef.current && cameraRef.current && controlsRef.current) {
         const follow = cameraFollowRef.current;
         const planet = follow.planet;
         if (!planet || !planet.userData || !planet.userData.group) {
@@ -1601,6 +1890,15 @@ export default function App() {
 
       // XR Interaction Logic (Controllers)
       if (xrSessionActiveRef.current && worldGroupRef.current) {
+        // Auto-scale info panels to keep them readable during zoom
+        const currentWorldScale = worldGroupRef.current.scale.x;
+        const targetWorldWidth = 0.45;
+        const infoPanel = infoPanelXRRef.current;
+        if (infoPanel) {
+          const localScale = targetWorldWidth / currentWorldScale;
+          infoPanel.scale.set(localScale, localScale / 1.6, 1);
+        }
+
         const c1 = controller1Ref.current;
         const c2 = controller2Ref.current;
 
@@ -1613,15 +1911,19 @@ export default function App() {
             if (prevDist > 0) {
               const scaleFactor = dist / prevDist;
               worldGroupRef.current.scale.multiplyScalar(scaleFactor);
-              // Clamp scale
-              worldGroupRef.current.scale.x = THREE.MathUtils.clamp(worldGroupRef.current.scale.x, 0.01, 2);
-              worldGroupRef.current.scale.y = THREE.MathUtils.clamp(worldGroupRef.current.scale.y, 0.01, 2);
-              worldGroupRef.current.scale.z = THREE.MathUtils.clamp(worldGroupRef.current.scale.z, 0.01, 2);
+              // Clamp scale - wider range for VR zoom
+              worldGroupRef.current.scale.x = THREE.MathUtils.clamp(worldGroupRef.current.scale.x, 0.0005, 5);
+              worldGroupRef.current.scale.y = THREE.MathUtils.clamp(worldGroupRef.current.scale.y, 0.0005, 5);
+              worldGroupRef.current.scale.z = THREE.MathUtils.clamp(worldGroupRef.current.scale.z, 0.0005, 5);
             }
             c1.userData.prevDist = dist;
           } else {
             c1.userData.prevDist = null;
           }
+
+          // XR Raycasting (Hover)
+          if (!c1.userData.isSelecting) castRayXR(c1, 'hover');
+          if (!c2.userData.isSelecting) castRayXR(c2, 'hover');
 
           // Drag to move (1 controller selecting)
           if (c1.userData.isSelecting && !c2.userData.isSelecting) {
